@@ -7,6 +7,7 @@ class waContactsCollection
     protected $fields = array();
     protected $order_by = '';
     protected $group_by;
+    protected $having = array();
     protected $where;
     protected $where_fields = array();
     protected $joins;
@@ -28,7 +29,7 @@ class waContactsCollection
     protected $alias_index = array();
 
     protected $models;
-    
+
     protected $left_joins = array();
 
     /**
@@ -68,7 +69,7 @@ class waContactsCollection
             $hash = substr($hash, 1);
         }
         $this->hash = trim($hash, '/');
-        
+
         if (substr($this->hash, 0 ,9) == 'contacts/') {
             $this->hash = substr($this->hash, 9);
         }
@@ -76,7 +77,7 @@ class waContactsCollection
             $this->hash = '';
         }
         $this->hash = explode('/', $this->hash, 2);
-        
+
         if (isset($this->hash[1])) {
             $escapedS = 'ESCAPED_BACKSLASH';
             while(FALSE !== strpos($this->hash[1], $escapedS)) {
@@ -84,11 +85,11 @@ class waContactsCollection
             }
             $this->hash[1] = str_replace('\/', $escapedS, $this->hash[1]);
         }
-        
+
         if ($this->hash[0] !== 'search' && isset($this->hash[1]) && strpos($this->hash[1], '/')) {
             $this->hash[1] = substr($this->hash[1], 0, strpos($this->hash[1], '/'));
         }
-        
+
         if (isset($this->hash[1])) {
             $this->hash[1] = str_replace($escapedS, '/', $this->hash[1]);
         }
@@ -103,7 +104,13 @@ class waContactsCollection
     {
         if ($this->count === null) {
             $sql = $this->getSQL();
-            $sql = "SELECT COUNT(".($this->joins ? 'DISTINCT ' : '')."c.id) ".$sql;
+            if ($this->getHaving()) {
+                $sql .= $this->getGroupBy();
+                $sql .= $this->getHaving();
+                $sql = "SELECT COUNT(t.id) FROM (SELECT c.id {$sql}) t";
+            } else {
+                $sql = "SELECT COUNT(".($this->joins ? 'DISTINCT ' : '')."c.id) ".$sql;
+            }
             //header("X-SQL-COUNT:". $sql);
             $this->count = (int)$this->getModel()->query($sql)->fetchField();
 
@@ -135,28 +142,28 @@ class waContactsCollection
             $extra_fileds = substr($fields, 2);
             $fields = $contact_model->getMetadata();
             unset($fields['password']);
-            
+
             $fields = array_keys($fields);
             foreach ($fields as &$f) {
                 $f = 'c.'.$f;
             }
             unset($f);
-            
+
             $this->post_fields['_internal'] = array('_online_status');
             $this->post_fields['email'] = array('email');
             $this->post_fields['data'] = array();
-            
+
             if ($extra_fileds) {
                 $extra_fileds = $this->getFields($extra_fileds);
                 $fields = array_merge($fields, explode(",", $extra_fileds));
                 $fields = array_unique($fields);
             }
-            
+
             $result = implode(",", $fields);
             foreach($this->fields as $alias => $expr) {
                 $result .= ",".$expr.' AS '.$alias;
             }
-            
+
             return $result;
         }
 
@@ -179,6 +186,8 @@ class waContactsCollection
                     $this->post_fields['_internal'][] = $f;
                 } elseif ($f == 'photo_url' || substr($f, 0, 10) == 'photo_url_') {
                     $required_fields['photo'] = 'c';
+                    $this->post_fields['_internal'][] = $f;
+                } elseif ($f == '_event') {
                     $this->post_fields['_internal'][] = $f;
                 } else {
                     $this->post_fields['data'][] = $f;
@@ -213,13 +222,19 @@ class waContactsCollection
      */
     public function getContacts($fields = "id", $offset = 0, $limit = 50)
     {
-        $sql = "SELECT ".$this->getFields($fields)." ".$this->getSQL();
-        $sql .= $this->getGroupBy();
-        $sql .= $this->getOrderBy();
-        $sql .= " LIMIT ".($offset ? $offset.',' : '').(int)$limit;
+        $sql = "SELECT ".$this->getFields($fields)."\n".$this->getSQL();
+        $sql .= "\n".$this->getGroupBy();
+        $sql .= "\n".$this->getHaving();
+        $sql .= "\n".$this->getOrderBy();
+        $sql .= "\nLIMIT ".($offset ? $offset.',' : '').(int)$limit;
         //header("X-SQL-". mt_rand() . ": ". str_replace("\n", " ", $sql));
         $data = $this->getModel()->query($sql)->fetchAll('id');
         $ids = array_keys($data);
+
+        // Update group and category count, if needed
+        if ($offset == 0 && $this->update_count && $limit > count($data) && count($data) != $this->update_count['count']) {
+            $this->update_count['model']->updateCount($this->update_count['id'], count($data));
+        }
 
         //
         // Load fields from other storages
@@ -236,10 +251,10 @@ class waContactsCollection
                  */
                 $fill[$field->getStorage(true)][$fid] = false;
             }
-            
+
             foreach ($this->post_fields as $table => $fields) {
                 if ($table == '_internal') {
-                    foreach ($fields as $f) {
+                    foreach (array_unique($fields) as $f) {
                         /**
                          * @var $f string
                          */
@@ -257,25 +272,28 @@ class waContactsCollection
                         } else {
                             switch($f) {
                                 case '_online_status':
-                                    
                                     $llm = new waLoginLogModel();
-                                    $contact_ids_map = $llm->select('DISTINCT contact_id')->where('datetime_out IS NULL')->fetchAll('contact_id');
                                     $timeout = waUser::getOption('online_timeout');
+                                    $contact_ids_map = $llm->select('DISTINCT contact_id')
+                                        ->where('contact_id IN (?)', array($ids))
+                                        ->where('datetime_out IS NULL')
+                                        ->fetchAll('contact_id');
                                     foreach($data as &$v) {
+                                        $v['_online_status'] = 'offline';
+                                        // Ever logged in?
                                         if (isset($v['last_datetime']) && $v['last_datetime'] && $v['last_datetime'] != '0000-00-00 00:00:00') {
-                                              if (time() - strtotime($v['last_datetime']) < $timeout) {
-                                                  if (isset($contact_ids_map[$v['id']])) {
-                                                      $v['_online_status'] = 'online';
-                                                  } else {
-                                                      $v['_online_status'] = 'offline';
-                                                  }
-                                              }
-                                          }
-                                          $v['_online_status'] = 'offline';
+                                            // Were active in the last 5 minutes?
+                                            if (time() - strtotime($v['last_datetime']) < $timeout) {
+                                                // Make sure user didn't log out
+                                                if (isset($contact_ids_map[$v['id']])) {
+                                                    $v['_online_status'] = 'online';
+                                                }
+                                            }
+                                        }
                                     }
                                     unset($v);
-                                    
                                     break;
+
                                 case '_access':
                                     $rm = new waContactRightsModel();
                                     $accessStatus = $rm->getAccessStatus($ids);
@@ -288,6 +306,26 @@ class waContactsCollection
                                     }
                                     unset($v);
                                     break;
+
+                                case '_event':
+                                    $cem = new waContactEventsModel();
+                                    $events = $cem->getEventByContact($ids);
+                                    $events_by_contacts = array();
+                                    foreach ($events as $id=>$e) {
+                                        if (empty($events_by_contacts[$e['contact_id']])) {
+                                            $events_by_contacts[$e['contact_id']] = $e;
+                                        }
+                                    }
+                                    foreach($data as $id => &$v) {
+                                        if (!isset($events_by_contacts[$id])) {
+                                            $v['_event'] = '';
+                                            continue;
+                                        }
+                                        $v['_event'] = $events_by_contacts[$id];
+                                    }
+                                    unset($v);
+                                    break;
+
                                 default:
                                     throw new waException('Unknown internal field: '.$f);
                             }
@@ -312,8 +350,9 @@ class waContactsCollection
                         if (!($f = waContactFields::get($field_id))) {
                             continue;
                         }
-                        if (!$f->isMulti()) {
-                            $post_data[$contact_id][$field_id] = isset($value[0]['data']) ? $value[0]['data'] : $value[0]['value'];
+                        if (!empty($value[0]) && !$f->isMulti()) {
+                            $post_data[$contact_id][$field_id] = isset($value[0]['data']) ? $value[0]['data'] :
+                                (is_array($value[0]) ? $value[0]['value'] : $value[0]);
                         }
                     }
                 }
@@ -335,7 +374,6 @@ class waContactsCollection
         return $data;
     }
 
-
     public function prepare($new = false, $auto_title = true)
     {
         if (!$this->prepared || $new) {
@@ -351,14 +389,14 @@ class waContactsCollection
                         'new'        => $new,
                     );
                     /**
-                * @event contacts_collection
-                * @param array [string]mixed $params
-                * @param array [string]waContactsCollection $params['collection']
-                * @param array [string]boolean $params['auto_title']
-                * @param array [string]boolean $params['new']
-                * @return bool null if ignored, true when something changed in the collection
-                */
-                    $processed = wa()->event(array('contacts', 'contacts_collection'), $params);
+                    * @event contacts_collection
+                    * @param array [string]mixed $params
+                    * @param array [string]waContactsCollection $params['collection']
+                    * @param array [string]boolean $params['auto_title']
+                    * @param array [string]boolean $params['new']
+                    * @return bool null if ignored, true when something changed in the collection
+                    */
+                    $processed = array_filter(wa()->event(array('contacts', 'contacts_collection'), $params));
                     if (!$processed) {
                         $this->where[] = 0;
                     }
@@ -387,6 +425,8 @@ class waContactsCollection
         }
         if ($ids) {
             $this->where[] = "c.id IN (".implode(",", $ids).")";
+        } else {
+            $this->where[] = "0=1";
         }
     }
 
@@ -395,11 +435,12 @@ class waContactsCollection
         if ($auto_title || !isset($this->alias_index['data'])) {
             $this->alias_index['data'] = 0;
         }
-        
+
         //$query = urldecode($query);   // sometime this urldecode broke query, better make urldecode (if needed) outside the searchPrepare
 
         // `&` can be escaped in search request. Need to split by not escaped ones only.
         $escapedBS = 'ESCAPED_BACKSLASH';
+        //If the user added to the request "ESCAPED_BACKSLASH" need to make it unique
         while(FALSE !== strpos($query, $escapedBS)) {
             $escapedBS .= rand(0, 9);
         }
@@ -407,6 +448,8 @@ class waContactsCollection
         while(FALSE !== strpos($query, $escapedAmp)) {
             $escapedAmp .= rand(0, 9);
         }
+
+        //Replace escaped ampersand and backslash to text 'ESCAPED_AMPERSAND' and 'ESCAPED_BACKSLASH'
         $query = str_replace('\\&', $escapedAmp, str_replace('\\\\', $escapedBS, $query));
         $query = explode('&', $query);
 
@@ -416,6 +459,7 @@ class waContactsCollection
             if (! ( $part = trim($part))) {
                 continue;
             }
+            //Return backslash and ampersand to query part
             $part = str_replace(array($escapedBS, $escapedAmp), array('\\', '&'), $part);
             $parts = preg_split("/(\\\$=|\^=|\*=|==|!=|>=|<=|=|>|<|@=)/uis", $part, 2, PREG_SPLIT_DELIM_CAPTURE);
 
@@ -425,13 +469,15 @@ class waContactsCollection
                     $cond = array();
                     foreach ($t_a as $t) {
                         $t = trim($t);
-                        if ($t) {
+                        if (strlen($t) > 0) {
                             $t = $model->escape($t, 'like');
                             $cond[] = "c.name LIKE '%{$t}%'";
                         }
                     }
-                    $this->addWhere(implode(" AND ", $cond));
-                    $title[] = _ws('Name').$parts[1].$parts[2];
+                    if ($cond) {
+                        $this->addWhere(implode(" AND ", $cond));
+                        $title[] = _ws('Name').$parts[1].$parts[2];
+                    }
                 } else if ($parts[0] == 'email') {
                     if (!isset($this->joins['email'])) {
                         $this->joins['email'] = array(
@@ -470,16 +516,16 @@ class waContactsCollection
 
                     $op = $parts[1];
                     $term = $parts[2];
-                    
+
                     if ($f === 'address:country') {
-                        
+
                         $al1 = $this->addJoin('wa_contact_data', $on);
                         $whr = "{$al1}.value ".$this->getExpression($op, $term);
                         if ($ext !== null) {
                             $whr .= " AND {$al1}.ext = '".$model->escape($ext)."'";
                             $whr = "({$whr})";
                         }
-                        
+
                         // search by l18n name of countries
                         if ($op === '*=') {
                             if (wa()->getLocale() === 'en_US') {
@@ -503,11 +549,11 @@ class waContactsCollection
                                 }
                             }
                         }
-                        
+
                         $this->addWhere($whr);
-                        
+
                     } else if ($f === 'address:region') {
-                        
+
                         if (strpos($term, ":") !== false) {
                             // country_code : region_code - search by country code AND region code AND only in wa_region
                             $term = explode(":", $term);
@@ -538,7 +584,7 @@ class waContactsCollection
                             }
                         }
                         $this->addWhere($whr);
-                        
+
                     } else {
                         $on .= ' AND :table.value '.$this->getExpression($op, $term);
                         if ($ext !== null) {
@@ -546,7 +592,7 @@ class waContactsCollection
                         }
                         $this->addJoin('wa_contact_data', $on);
                     }
-                    
+
                 }
             }
         }
@@ -563,7 +609,6 @@ class waContactsCollection
         }
     }
 
-
     public function addTitle($title, $delim = ', ')
     {
         if (!$title && $title !== '0' && $title !== 0) {
@@ -574,7 +619,7 @@ class waContactsCollection
         }
         $this->title .= $title;
     }
-    
+
     public function setTitle($title)
     {
         $this->title = $title;
@@ -607,9 +652,30 @@ class waContactsCollection
 
     protected function usersPrepare($params, $auto_title = true)
     {
-        $this->where[] = 'c.is_user = 1';
+        $this->where[] = 'c.login IS NOT NULL';
+        if ($params == 'banned') {
+            $this->where[] = 'c.is_user = -1';
+        } else if ($params == 'active_and_banned') {
+            $this->where[] = 'c.is_user <> 0';
+        } else {
+            $this->where[] = 'c.is_user = 1';
+        }
         if ($auto_title) {
             $this->addTitle(_ws('All users'));
+        }
+    }
+
+    protected function companyPrepare($params, $auto_title = true)
+    {
+
+        $params = array_filter(array_map('intval', explode(',', $params)));
+        if ($params) {
+            $this->where[] = "c.company_contact_id IN ('".join("','", $params)."')";
+        } else {
+            $this->where[] = '0';
+        }
+        if ($auto_title) {
+            $this->addTitle(_ws('Company'));
         }
     }
 
@@ -631,11 +697,12 @@ class waContactsCollection
             );
         }
 
+        $this->where[] = "cg.group_id = ".(int)$id;
+        $this->where[] = "c.is_user > 0";
         $this->joins[] = array(
             'table' => 'wa_user_groups',
             'alias' => 'cg',
         );
-        $this->where[] = "cg.group_id = ".(int)$id;
     }
 
 
@@ -664,6 +731,17 @@ class waContactsCollection
             return "";
         }
     }
+
+    protected function getHaving()
+    {
+        if ($this->having) {
+            return " HAVING " . implode(' AND ', $this->having);
+        } else {
+            return "";
+        }
+    }
+
+
 
     /**
      * Returns contacts model
@@ -767,9 +845,9 @@ class waContactsCollection
                     $sql .= ' FORCE INDEX ('.$join['force_index'].')';
                 }
                 $sql .= " ON ".$on;
-            }            
+            }
         }
-        
+
         if ($this->where) {
             $where = $this->where;
             if ($with_primary_email) {
@@ -778,9 +856,9 @@ class waContactsCollection
             if (!empty($where['_or'])) {
                 $where['_or'] = "(" . implode(" OR ", $where['_or']) . ")";
             }
-            $sql .= " WHERE ".implode(" AND ", $where);
+            $sql .= "\nWHERE ".implode(" AND ", $where);
         }
-        
+
         return $sql;
     }
 
@@ -820,7 +898,10 @@ class waContactsCollection
 
         }
         $sql = "INSERT ".($ignore ? "IGNORE " : "")."INTO ".$table." (".implode(",", $insert_fields).")
-                SELECT DISTINCT ".implode(",", $select_fields)." ".$this->getSQL($primary_email).$this->getOrderBy();
+                SELECT DISTINCT ".implode(",", $select_fields)." ".$this->getSQL($primary_email);
+        $sql .= $this->getGroupBy();
+        $sql .= $this->getHaving();
+        $sql .= $this->getOrderBy();
         return $this->getModel()->exec($sql);
     }
 
@@ -849,7 +930,14 @@ class waContactsCollection
             $this->group_by = 'c.id';
             $this->order_by = 'data_count '.$order;
         } else if ($field) {
-            $this->order_by = $field." ".$order;
+            $field = trim($field);
+            if (substr($field, 0, 2) == 'c.') {
+                $field = substr($field, 2);
+            }
+            if (!$this->getModel()->fieldExists($field)) {
+                $field = 'id';
+            }
+            $this->order_by = 'c.'.$field." ".$order;
         }
         return $this->order_by;
     }
@@ -896,7 +984,7 @@ class waContactsCollection
         }
         return $alias;
     }
-    
+
     public function addLeftJoin($table, $on = null, $where = null, $options = array())
     {
         $type = '';
@@ -964,6 +1052,11 @@ class waContactsCollection
         return $this;
     }
 
+    public function addHaving($condition)
+    {
+        $this->having[] = $condition;
+    }
+
     public function getJoinedAlias($table)
     {
         $alias = $this->getTableAlias($table);
@@ -994,22 +1087,22 @@ class waContactsCollection
             return $this->hash;
         }
     }
-    
+
     public function getInfo()
     {
         return $this->info;
     }
-    
+
     public function setInfo($info)
     {
         $this->info = $info;
     }
-    
+
     public function getUpdateCount()
     {
         return $this->update_count;
     }
-    
+
     public function setUpdateCount($update_count)
     {
         $this->update_count = $update_count;

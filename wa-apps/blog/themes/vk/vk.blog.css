@@ -23,6 +23,7 @@
 .post h3 { margin-right: 5px; margin-bottom: 3px; }
 .post h3 a { text-decoration: none; }
 .post img { max-width: 100%; height: auto !important; }
+.post iframe { max-width: 100%; }
 .post .text { margin-top: 5px;}
 .post textarea { width: 100%; min-height: 300px; margin-top: 10px; height: 250px; }
 .post.search-match { margin-top: 20px; margin-bottom: 50px; }
@@ -36,6 +37,12 @@
 .credentials .username, .credentials .username a { color: #777; padding: 0; display: inline; }
 .credentials a.username:hover { color: red; }
 .credentials .date { margin: 0 3px; }
+
+.photo-album-attachment ul.thumbs { padding-left: 0; }
+.photo-album-attachment ul.thumbs li { list-style: none; display: inline-block; margin: 0 20px 20px 0; }
+.photo-album-attachment .photo { margin-bottom: 20px; }
+.photo-album-attachment .photo img { margin-top: -10px; }
+.post .photo-album-attachment { padding-top: 10px; }
 
 .comment-form { padding: 0; margin-top: 30px; }
 .comment-form h4 { margin: 0 0 20px; }

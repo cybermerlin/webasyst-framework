@@ -81,7 +81,7 @@ final class waDbStatement
 
         $matches = array();
 
-        if (preg_match_all('/([sibfl]?)(\?|:[A-z0-9_]+)/', $this->query, $matches, PREG_OFFSET_CAPTURE)) {
+        if (preg_match_all('/([sibfl]?)(\?|:[a-zA-Z0-9_]+)/', $this->query, $matches, PREG_OFFSET_CAPTURE)) {
             $unnamed_count = 0;
             foreach ($matches[0] as $id => $match) {
                 $match[2] = $matches[1][$id][0];
@@ -130,7 +130,7 @@ final class waDbStatement
                     $replaced_value = ((bool)$this->binded_params[$place_name]) ? 1 : 0;
                     break;
                 case 'l':
-                    $replaced_value = str_replace(array('%', '_'), array('\%', '\_'), $this->escape($this->binded_params[$place_name]));
+                    $replaced_value = str_replace(array('%', '_', '\\'), array('\%', '\_', '\\\\'), $this->escape($this->binded_params[$place_name]));
                     break;
                 case 'f':
                     $replaced_value = str_replace(',', '.', (float)$this->binded_params[$place_name]);
@@ -168,12 +168,9 @@ final class waDbStatement
     private function checkParams()
     {
         if(count($this->places_map) > count($this->binded_params)) {
-            $error = "Bad params: \n" .
-                     "Placeholder's params: \n" .
-                     var_export($this->places_map, true) . "\n" .
-                     "Bind params: \n" .
-                     var_export($this->binded_params, true) . "\n";
-            throw new waException($error);
+            $error = "Insufficient params: ".wa_dump_helper($this->binded_params).
+                    "\nfor query:\n" . $this->query;
+            throw new waDbException($error);
         }
         return true;
     }

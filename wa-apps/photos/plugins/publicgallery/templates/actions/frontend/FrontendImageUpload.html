@@ -15,6 +15,7 @@
         [`Files uploaded with errors`]
     </div>
     <div id="upload-finished" style="display:none" class="block double-padded">
+        <em>[`Photos have been successfully uploaded`]</em>
     </div>
 </div>
 
@@ -47,7 +48,7 @@
                         {% if (file.responseText) { %}
                             {%#file.responseText%}
                         {% } else { %}
-                            {%=$_('Failed to upload. Most probably, there were not enough memory to create thumbnails.')%}.
+                            {%=$_('Failed to upload. Most probably, there were not enough memory to create thumbnails.')%}
                         {% } %}
                     {% } else { %}
                         {%=file.error%}

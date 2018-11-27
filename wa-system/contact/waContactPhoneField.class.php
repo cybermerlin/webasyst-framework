@@ -22,11 +22,33 @@ class waContactPhoneField extends waContactStringField
         $this->options['formats']['value'] = new waContactPhoneFormatter();
         $this->options['formats']['html'] = new waContactPhoneTopFormatter();
         $this->options['formats']['top'] = new waContactPhoneTopFormatter();
+        if (!isset($this->options['validators'])) {
+            $this->options['validators'] = new waPhoneNumberValidator($this->options, array('required' => _ws('This field is required')));
+        }
+    }
+
+    public static function cleanPhoneNumber($value)
+    {
+        $value = is_scalar($value) ? (string)$value : '';
+        $value = trim($value);
+        if (strlen($value) > 0) {
+            $value = str_replace(str_split('+-()'), '', $value);
+            $value = preg_replace('/(\d)\s+(\d)/i', '$1$2', $value);
+        }
+        return $value;
+    }
+
+    public static function isPhoneEquals($phone1, $phone2)
+    {
+        if (!is_scalar($phone1) || !is_scalar($phone2)) {
+            return false;
+        }
+        return self::cleanPhoneNumber($phone1) === self::cleanPhoneNumber($phone2);
     }
 
     protected function setValue($value)
     {
-        if (is_array($value) && isset($value['value'])) {
+        if (is_array($value) && array_key_exists('value', $value)) {
             $v = $value['value'];
         } else {
             $v = $value;
@@ -55,8 +77,10 @@ class waContactPhoneField extends waContactStringField
     public function format($data, $format = null)
     {
         $data = parent::format($data, $format);
-
-        if ($format && in_array('html', explode(',', $format))) {
+        if ($format && !is_array($format)) {
+            $format = explode(',', $format);
+        }
+        if ($format && in_array('html', $format)) {
             if ($this->isMulti()) {
                 if (is_array($data)) {
                     $result = htmlspecialchars($data['value']);
@@ -77,6 +101,47 @@ class waContactPhoneField extends waContactStringField
         }
         return $data;
     }
+
+
+    public function validate($data, $contact_id=null)
+    {
+        $errors = parent::validate($data, $contact_id);
+        if ($errors) {
+            return $errors;
+        }
+
+        $data_model = new waContactDataModel();
+        $contact_model = new waContactModel();
+        if ($this->isMulti()) {
+            if (!empty($data[0]) && $contact_id) {
+                $c = $contact_model->getById($contact_id);
+                if (!$c['password']) {
+                    return $errors;
+                }
+                $value = $this->format($data[0], 'value');
+                $id = $data_model->getContactWithPasswordByPhone($value, $contact_id);
+                if ($id > 0) {
+                    $errors[0] = sprintf(_ws('User with the same “%s” field value is already registered.'), _ws('Phone'));
+                }
+            }
+        } else {
+            $value = $this->format($data, 'value');
+            if ($value) {
+                if ($contact_id) {
+                    $c = $contact_model->getById($contact_id);
+                    if (!$c['password']) {
+                        return $errors;
+                    }
+                }
+                $id = $data_model->getContactWithPasswordByPhone($value, $contact_id);
+                if ($id > 0) {
+                    $errors = sprintf(_ws('User with the same “%s” field value is already registered.'), _ws('Phone'));
+                }
+            }
+        }
+        return $errors;
+    }
+
 }
 
 class waContactPhoneFormatter extends waContactFieldFormatter
@@ -100,14 +165,15 @@ class waContactPhoneFormatter extends waContactFieldFormatter
 
         $formats_str  = array(
             // 10 digits
-            '0 800 ##-##-##',
+            '0 800 ###-###',
+            wa()->getLocale() == 'ru_RU' ? '(###) ###-##-##' : '(###) ###-####',
             // 11 digits
             '(0##) ####-####',
             '+1 (###) ###-####',
             '+7 (###) ###-##-##',
             '8 800 ###-####',
             // 12 digits
-            '+380 (##) ###-##-##',
+            '+38 (0##) ###-##-##',
             '+375 (##) ###-##-##',
             '+44 ## ####-####',
         );
@@ -129,6 +195,7 @@ class waContactPhoneFormatter extends waContactFieldFormatter
                             $c = $v[0][$i++];
                         }
                     }
+                    unset($c);
                     $v[0] = implode('', $f);
                     return implode(' ', $v);
                 }
@@ -183,7 +250,7 @@ class waContactPhoneJsFormatter extends waContactPhoneFormatter
         if (is_array($data)) {
             $data['value'] = parent::format($data);
             // No htmlspecialchars, because isn't needed here
-            // This formatted data means to be used in js code, 
+            // This formatted data means to be used in js code,
             // make escape there by yourself
             return $data;
         } else {

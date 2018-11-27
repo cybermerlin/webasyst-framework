@@ -38,7 +38,7 @@ class contactsContactsMergeController extends waJsonController
         if ($merge_result['users']) {
             $message .= '<br />' . _w("%d contact was skipped because they have user accounts", "%d contacts were skipped because they have user accounts",  $merge_result['users']);
         }
-        
+
         $this->response['merge_result'] = $merge_result;
         $this->response['message'] = $message;
         $this->response['slalve_ids'] = $merge_ids;
@@ -72,6 +72,11 @@ class contactsContactsMergeController extends waJsonController
         }
         $master_data = $contacts_data[$master_id];
         unset($contacts_data[$master_id]);
+
+        if (!$master_data) {
+            throw new waException('No contacts merge with.');
+        }
+
         $master = new waContact($master_id);
 
         $result = array(
@@ -87,19 +92,26 @@ class contactsContactsMergeController extends waJsonController
                 $master_data['photo'] = null;
             }
         }
-        
+
         $data_fields = waContactFields::getAll('enabled');
         $check_duplicates = array();    // field_id => true
         $update_photo = null;               // if need to update photo here it is file paths
-        
-        // merge loop
+
+        // check is user loop
         foreach ($contacts_data as $id => $info) {
-            if ($info['is_user']) {
+            if ($info['is_user'] > 0) {
                 $result['users']++;
                 unset($contacts_data[$id]);
                 continue;
             }
+        }
 
+        if (!$contacts_data) {
+            return $result;
+        }
+
+        // merge loop
+        foreach ($contacts_data as $id => $info) {
             foreach ($data_fields as $f => $field) {
                 if (!empty($info[$f])) {
                     if ($field->isMulti()) {
@@ -114,7 +126,7 @@ class contactsContactsMergeController extends waJsonController
                     }
                 }
             }
-            
+
             // photo
             if (!$master_data['photo'] && $info['photo'] && !$update_photo) {
                 $filename_original = wa()->getDataPath(waContact::getPhotoDir($info['id'])."{$info['photo']}.original.jpg", true, 'contacts');
@@ -128,7 +140,15 @@ class contactsContactsMergeController extends waJsonController
                     }
                 }
             }
-            
+
+            // birthday parts
+            if (!empty($data_fields['birthday'])) {
+                foreach(array('birth_day', 'birth_month', 'birth_year') as $f) {
+                    if (empty($master_data[$f]) && !empty($info[$f])) {
+                        $master[$f] = $master_data[$f] = $info[$f];
+                    }
+                }
+            }
         }
 
         // Remove duplicates
@@ -184,22 +204,22 @@ class contactsContactsMergeController extends waJsonController
         }
         $category_ids = array_keys($category_ids);
         $ccm->add($master_id, $category_ids);
-        
+
         // update photo
         if ($update_photo) {
             $rand = mt_rand();
-            $path = waContact::getPhotoDir($master['id']);
-            
+            $path = wa()->getDataPath(waContact::getPhotoDir($master['id']), true, 'contacts', false);
+
             // delete old image
             if (file_exists($path)) {
                 waFiles::delete($path);
             }
             waFiles::create($path);
-            
+
             $filename = $path."/".$rand.".original.jpg";
             waFiles::create($filename);
             waImage::factory($update_photo['original'])->save($filename, 90);
-            
+
             if (!empty($update_photo['crop'])) {
                 $filename = $path."/".$rand.".jpg";
                 waFiles::create($filename);
@@ -207,7 +227,7 @@ class contactsContactsMergeController extends waJsonController
             } else {
                 waFiles::copy($filename, $path."/".$rand.".jpg");
             }
-            
+
             $master->save(array(
                 'photo' => $rand
             ));
@@ -216,15 +236,27 @@ class contactsContactsMergeController extends waJsonController
         $result['total_merged'] = count($contacts_data) + 1;
 
         $contact_ids = array_keys($contacts_data);
-        
+
+        // wa_log
+        $log_model = new waLogModel();
+        $log_model->updateByField('contact_id', $contact_ids, array(
+            'contact_id' => $master_id
+        ));
+
+        // wa_login_log
+        $login_log_model = new waLoginLogModel();
+        $login_log_model->updateByField('contact_id', $contact_ids, array(
+            'contact_id' => $master_id
+        ));
+
         // Merge event
         $params = array('contacts' => $contact_ids, 'id' => $master_data['id']);
-        wa()->event('merge', $params);
-        
+        wa()->event(array('contacts', 'merge'), $params);
+
         // Delete all merged contacts
         $contact_model = new waContactModel();
         $contact_model->delete($contact_ids, false); // false == do not trigger event
-        
+
         $history_model = new contactsHistoryModel();
         foreach ($contact_ids as $contact_id) {
             $history_model->deleteByField(array(

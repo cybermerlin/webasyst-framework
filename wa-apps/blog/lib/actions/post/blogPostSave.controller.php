@@ -41,7 +41,7 @@ class blogPostSaveController extends waJsonController
     {
         $post = array(
             'id'                 => waRequest::post('post_id', null, waRequest::TYPE_INT),
-            'title'              => substr(waRequest::post('title', '', waRequest::TYPE_STRING_TRIM), 0, 255),
+            'title'              => mb_substr(waRequest::post('title', '', waRequest::TYPE_STRING_TRIM), 0, 255),
             'text'               => waRequest::post('text'),
             'blog_id'            => waRequest::post('blog_id'),
             'contact_id'         => waRequest::post('contact_id'),
@@ -51,10 +51,32 @@ class blogPostSaveController extends waJsonController
             'comments_allowed'   => max(0,min(1,waRequest::post('comments_allowed', 0, waRequest::TYPE_INT))),
             'public'             => waRequest::post('public'),
             'schedule_datetime'  => waRequest::post('schedule_datetime'),
-            'meta_title' => waRequest::post('meta_title', null, waRequest::TYPE_STRING_TRIM),
-            'meta_keywords' => waRequest::post('meta_keywords', null, waRequest::TYPE_STRING_TRIM),
-            'meta_description' => waRequest::post('meta_description', null, waRequest::TYPE_STRING_TRIM)
+            'meta_title'         => waRequest::post('meta_title', null, waRequest::TYPE_STRING_TRIM),
+            'meta_keywords'      => waRequest::post('meta_keywords', null, waRequest::TYPE_STRING_TRIM),
+            'meta_description'   => waRequest::post('meta_description', null, waRequest::TYPE_STRING_TRIM),
+            'album_id'           => waRequest::post('album_id', null, waRequest::TYPE_INT),
+            'album_link_type'    => waRequest::post('album_link_type', null, waRequest::TYPE_STRING_TRIM),
         );
+
+        if ($post['album_id'] && blogPhotosBridge::isAvailable()) {
+            wa('photos');
+            $album_model = new photosAlbumModel();
+            $album = $album_model->getById($post['album_id']);
+            if (!$album) {
+                $album = $post['album_id'] = null;
+            } else if ($album['status'] <= 0) {
+                $post['album_link_type'] = null;
+            }
+        } else {
+            $post['album_id'] = null;
+        }
+        if (!$post['album_id']) {
+            $post['album_id'] = $post['album_link_type'] = null;
+        } else {
+            if ($post['album_link_type'] != 'photos') {
+                $post['album_link_type'] = 'blog';
+            }
+        }
 
         $this->inline = waRequest::post('inline', false);
 
@@ -161,6 +183,9 @@ class blogPostSaveController extends waJsonController
         if (waRequest::post('transliterate', null)) {
             $options['transliterate'] = true;
         }
+        if (waRequest::post('update_url_on_error')) {
+            $options['update_url_on_error'] = true;
+        }
 
         $this->validate_messages = $this->post_model->validate($post, $options);
 
@@ -190,13 +215,17 @@ class blogPostSaveController extends waJsonController
                 }
                 $this->post_model->updateItem($post['id'], $post);
                 if ($prev_post['status'] != blogPostModel::STATUS_PUBLISHED && $post['status'] == blogPostModel::STATUS_PUBLISHED) {
-                    $this->log('post_publish', 1);
+                    $this->logAction('post_publish', $post['id']);
+                } else if ($prev_post['status'] == blogPostModel::STATUS_PUBLISHED && $post['status'] != blogPostModel::STATUS_PUBLISHED) {
+                    $this->logAction('post_unpublish', $post['id']);
                 } else {
-                    $this->log('post_edit', 1);
+                    $this->logAction('post_edit', $post['id']);
                 }
             } else {
                 $post['id'] = $this->post_model->updateItem(null, $post);
-                $this->log('post_publish', 1);
+                if ($post['status'] == blogPostModel::STATUS_PUBLISHED) {
+                    $this->logAction('post_publish', $post['id']);
+                }
             }
 
             $this->saveParams($post['id']);
@@ -210,6 +239,9 @@ class blogPostSaveController extends waJsonController
                         'action' => 'edit',
                         'id' => $post['id'],
                     );
+                    if (waRequest::request('realtime_on')) {
+                        $params['realtime_on'] = 1;
+                    }
                 } elseif ($post['blog_status'] == blogBlogModel::STATUS_PUBLIC) {
                     $params = array(
                         'blog' => $post['blog_id'],
@@ -243,7 +275,7 @@ class blogPostSaveController extends waJsonController
     private function delete($post)
     {
         $post_model = new blogPostModel();
-        $post = $post_model->getFieldsById($post['id'], array('id', 'blog_id'));
+        $post = $post_model->getFieldsById($post['id'], array('id', 'blog_id', 'contact_id', 'status'));
         if ($post) {
             if (!$this->getUser()->isAdmin($this->getApp())) {
                 // author of post
@@ -254,6 +286,9 @@ class blogPostSaveController extends waJsonController
                 }
             }
             $post_model->deleteById($post['id']);
+            if ($post['status'] == blogPostModel::STATUS_PUBLISHED) {
+                $this->logAction('post_delete', $post['id']);
+            }
             $this->response['redirect'] = '?blog='.$post['blog_id'];
         } else {
             $this->response['redirect'] = '?';

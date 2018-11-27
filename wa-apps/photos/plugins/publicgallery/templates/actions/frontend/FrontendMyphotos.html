@@ -19,7 +19,7 @@ $(function() {
 <style>
     .block.double-padded { padding: 20px; }
     .image-upload-dropbox { border: 2px dashed #ccc; margin-bottom: 40px; }
-    .fileinput-button input { position: absolute; top: 0; right: 0; margin: 0; border: solid transparent; opacity: 0; filter: alpha(opacity=0); -moz-transform: translate(-300px, 0) scale(4); direction: ltr; cursor: pointer; }
+    .fileinput-button input { position: absolute; top: 0; right: 0; margin: 0; border: solid transparent; opacity: 0; filter: alpha(opacity=0); direction: ltr; cursor: pointer; }
     .fileinput-button { position: relative; overflow: hidden; margin-right: 4px; }
     .upload-progress-content { display: block; overflow: auto; overflow-x: hidden; }
     .upload-progress-status { margin-top: 10px; }
@@ -37,7 +37,7 @@ background: -moz-linear-gradient(top,  rgba(83,169,242,1) 0%, rgba(35,91,147,1) 
     #upload-imagelist ul.zebra li.error .upload-oneimage-progress { position: static; background: #e88; border-right: 2px solid #f00;}
     #upload-imagelist ul.zebra li.error .upload-oneimage-progress .image-filename { white-space: normal; }
     #upload-error { margin-left: 0px; }
-    #upload-finished { border: 2px dashed #ccc; margin-bottom: 40px; }
+    #upload-finished { background: #ffc; margin-bottom: 40px; }
 </style>
 
 {if !$wa->userId()}

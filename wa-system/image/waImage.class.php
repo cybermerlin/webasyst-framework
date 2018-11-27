@@ -27,6 +27,7 @@ class waImage
     const ALIGN_TOP_RIGHT    = 'ALIGN_TOP_RIGHT';
     const ALIGN_BOTTOM_LEFT  = 'ALIGN_BOTTOM_LEFT';
     const ALIGN_BOTTOM_RIGHT = 'ALIGN_BOTTOM_RIGHT';
+    const ALIGN_CENTER = 'ALIGN_CENTER';
 
     const ORIENTATION_VERTICAL = 'VERTICAL';
     const ORIENTATION_HORIZONTAL = 'HORIZONTAL';
@@ -134,6 +135,9 @@ class waImage
 
         if (!class_exists($class, true)) {
             throw new waException(sprintf(_ws('Not %s image adapter'), $adapter));
+        }
+        if ($class == 'waImage') {
+            throw new waException(_ws('No image adapters found. Install ImageMagick or GD extension to enable image-processing functionality.'));
         }
         return new $class($file);
     }
@@ -443,4 +447,10 @@ class waImage
         $this->_watermark($options);
         return $this;
     }
+
+    public function getPixel($x, $y)
+    {
+        return $this->_getPixel($x, $y);
+    }
 }
+

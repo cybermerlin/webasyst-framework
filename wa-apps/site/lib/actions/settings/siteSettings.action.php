@@ -1,8 +1,7 @@
 <?php 
 
 class siteSettingsAction extends waViewAction
-{   
-    
+{
     public function execute()
     {
         $apps = wa()->getApps();
@@ -48,6 +47,14 @@ class siteSettingsAction extends waViewAction
         $this->view->assign('apps', $temp);
         $this->view->assign('domain_id', siteHelper::getDomainId());
         $this->view->assign('domain', siteHelper::getDomain());
+        $this->view->assign('title', siteHelper::getDomain('title'));
+        $this->view->assign('is_https', waRequest::isHttps());
+
+        if ($domain_alias = wa()->getRouting()->isAlias(siteHelper::getDomain())) {
+            $this->view->assign('domain_alias', $domain_alias);
+            return;
+        }
+
         $s = siteHelper::getDomain('style');
         $this->view->assign('style', $s ? $s : 'white');
         $domain = siteHelper::getDomain();
@@ -67,12 +74,82 @@ class siteSettingsAction extends waViewAction
             $this->view->assign('domain_apps_type', 1);            
         }
         $this->view->assign('domain_apps', $domain_config['apps']);
-        foreach (array('head_js', 'google_analytics') as $key) {
+        $this->view->assign('cdn_list', ifset($domain_config['cdn_list'], array()));
+        foreach (array('head_js') as $key) {
             $this->view->assign($key, isset($domain_config[$key]) ? $domain_config[$key] : '');
         }
+        if (isset($domain_config['google_analytics'])) {
+            if (!is_array($domain_config['google_analytics'])) {
+                $domain_config['google_analytics'] = array('code' => $domain_config['google_analytics']);
+            }
+        } else {
+            $domain_config['google_analytics'] = array('code' => '');
+        }
+        $this->view->assign('google_analytics', $domain_config['google_analytics']);
         $this->getStaticFiles($domain);
         $this->view->assign('url', $this->getDomainUrl($domain));
-        $this->view->assign('title', siteHelper::getDomain('title'));
+        $this->view->assign('ssl_all', ifset($domain_config, 'ssl_all', null));
+        $this->view->assign('url_notification', ifset($domain_config, 'url_notification', false));
+
+        // Confirm when a site is deleted
+        $domains = wa()->getRouting()->getDomains();
+        // Apps on the current domain
+        $route_apps = array();
+        foreach ($routes as $_r) {
+            if (isset($_r['app']) && isset($apps[$_r['app']])) {
+                $route_apps[] = $_r['app'];
+            }
+        }
+
+        // from here we will remove applications,
+        // the rules for which are also on other sites
+        // "latter apps"
+        $route_apps = array_unique($route_apps);
+
+        foreach ($domains as $_d) {
+            // except the current domain
+            if ($_d == $domain) {
+                continue;
+            }
+            // Apps on the domain
+            $domain_routes = wa()->getRouting()->getRoutes($_d);
+            foreach ($domain_routes as $_r) {
+                if (empty($_r['app']) || !isset($apps[$_r['app']])) {
+                    continue;
+                }
+                // If there is a rule for an application
+                // in another domain, delete him from "latter apps"
+                $app_index = array_search($_r['app'], $route_apps);
+                if ($app_index !== false) {
+                    unset($route_apps[$app_index]);
+                }
+            }
+        }
+
+        // Get the names of applications
+        $latter_apps_names = array();
+        foreach ($route_apps as $_app) {
+            $latter_apps_names[] = $apps[$_app]['name'];
+        }
+
+        $this->view->assign(array(
+            'domains'           => $domains,
+            'latter_apps_names' => $latter_apps_names,
+        ));
+
+        /**
+         * Backend settings page
+         * UI hook allow extends backend settings page
+         * @event backend_settings
+         * @param array $domain
+         * @return array[string][string]string $return[%plugin_id%]['action_button_li'] html output
+         * @return array[string][string]string $return[%plugin_id%]['section'] html output
+         */
+        $domain_info = siteHelper::getDomainInfo();
+        $this->view->assign('backend_settings', wa()->event('backend_settings', $domain_info, array(
+            'action_button_li',
+            'section'
+        )));
     }
 
 
@@ -128,7 +205,7 @@ class siteSettingsAction extends waViewAction
         if (file_exists($path)) {
             $favicon = wa()->getDataUrl('data/'.$domain.'/favicon.ico', true);
         } else {
-            $favicon = 'http://'.$domain.'/favicon.ico';
+            $favicon = 'http'.(waRequest::isHttps() ? 's' : '').'://'.$domain.'/favicon.ico';
         }
         $path = wa()->getDataPath(null, true).'/data/'.$domain.'/apple-touch-icon.png';
         if (file_exists($path)) {

@@ -7,13 +7,13 @@ class waDesignActions extends waActions
     protected $themes_url = '#/themes/';
 
     protected $options = array(
-        'container' => true,
+        'container'  => true,
         'save_panel' => true,
-        'js' => array(
-            'ace' => true,
+        'js'         => array(
+            'ace'    => true,
             'editor' => true,
         ),
-        'is_ajax' => false
+        'is_ajax'    => false
     );
 
     public function defaultAction()
@@ -45,32 +45,36 @@ class waDesignActions extends waActions
             $t_id = ifset($themes_routes[0]['theme'], 'default');
         } else {
             $t_id = 'default';
+            if (empty($themes[$t_id])) {
+                reset($themes);
+                $t_id = key($themes);
+            }
         }
         $theme = $themes[$t_id];
 
         $routing_url = false;
         if (wa()->appExists('site')) {
             wa('site');
-            $domain_model = new siteDomainModel();
             $routing_url = wa()->getAppUrl('site').'#/routing/';
         }
         $current_url = $this->design_url.'theme='.$theme['id'];
         if ($route) {
             $current_url .= '&domain='.urlencode($route['_domain']).'&route='.$route['_id'];
         }
+
         $this->display(array(
-            'current_url' => $current_url,
+            'current_url'   => $current_url,
             'template_path' => $this->getConfig()->getRootPath().'/wa-system/design/templates/',
-            'design_url' => $this->design_url,
-            'themes_url' => $this->themes_url,
-            'theme' => $theme,
-            'route' => $route,
-            'themes' => $themes,
+            'design_url'    => $this->design_url,
+            'themes_url'    => $this->themes_url,
+            'theme'         => $theme,
+            'route'         => $route,
+            'themes'        => $themes,
             'themes_routes' => $themes_routes,
-            'app_id' => $app_id,
-            'app' => $app,
-            'routing_url' => $routing_url,
-            'options' => $this->options
+            'app_id'        => $app_id,
+            'app'           => $app,
+            'routing_url'   => $routing_url,
+            'options'       => $this->options,
         ), $template);
     }
 
@@ -104,9 +108,17 @@ class waDesignActions extends waActions
                 }
             }
             $file = $theme->getFile($f);
-            if (!$file && !file_exists($theme->getPath().'/'.$f)) {
-                $f = 'index.html';
-                $file = $theme->getFile($f);
+            if (!$file) {
+                $f = preg_replace('@(\\{1,}|/{2,})@', '/', $f);
+                if (!$f
+                    ||
+                    preg_match('@(^|/)\.\./@', $f)
+                    ||
+                    !file_exists($theme->getPath().'/'.$f)
+                ) {
+                    $f = 'index.html';
+                    $file = $theme->getFile($f);
+                }
             }
             $file['id'] = $f;
             if ($theme->parent_theme_id && !empty($file['parent'])) {
@@ -140,45 +152,52 @@ class waDesignActions extends waActions
             $file['content'] = $content;
         } else {
             $file = array(
-                'id' => null,
+                'id'          => null,
                 'description' => '',
-                'custom' => true,
-                'content' => ''
-                );
+                'custom'      => true,
+                'content'     => ''
+            );
         }
-
 
         $routes = $this->getRoutes(true);
         $theme_usages = array();
+        $theme_usages_decoded = null;
+        $idna = new waIdna();
+
         foreach ($routes as $r) {
             if (empty($r['theme'])) {
                 $r['theme'] = 'default';
             }
             if ($r['theme'] == $theme_id && $r['_domain'] != waRequest::get('domain') && $r['_id'] != waRequest::get('route')) {
                 $theme_usages[] = htmlspecialchars($r['_domain'].'/'.$r['url']);
+                $theme_usages_decoded[] = $idna->decode(htmlspecialchars($r['_domain'].'/'.$r['url']));
             }
         }
 
         $route_url = false;
+        $route_url_decoded = null;
         if ($_d = waRequest::get('domain')) {
             $domain_routes = wa()->getRouting()->getByApp(wa()->getApp(), $_d);
             if (isset($domain_routes[waRequest::get('route')])) {
                 $route_url = htmlspecialchars($_d.'/'.$domain_routes[waRequest::get('route')]['url']);
+                $route_url_decoded = $idna->decode($route_url);
             }
         }
 
         $template = $this->getConfig()->getRootPath().'/wa-system/design/templates/DesignEdit.html';
         $data = array(
-            'options' => $this->options,
-            'app_id' => $app_id,
-            'design_url' => $this->design_url,
-            'app' => $app,
-            'file' => $file,
-            'theme_id' => $theme_id,
-            'theme' => $theme,
-            'theme_usages' => $theme_usages,
-            'route_url' => $route_url,
-            'theme_files' => $theme_files
+            'options'              => $this->options,
+            'app_id'               => $app_id,
+            'design_url'           => $this->design_url,
+            'app'                  => $app,
+            'file'                 => $file,
+            'theme_id'             => $theme_id,
+            'theme'                => $theme,
+            'theme_usages'         => $theme_usages,
+            'theme_usages_decoded' => $theme_usages_decoded,
+            'route_url'            => $route_url,
+            'route_url_decoded'    => $route_url_decoded,
+            'theme_files'          => $theme_files
         );
         if ($theme->parent_theme_id) {
             $data['parent_theme'] = $theme->parent_theme;
@@ -201,13 +220,13 @@ class waDesignActions extends waActions
         }
         $domain = wa()->getRouting()->getDomain();
         foreach ($routes as $r) {
-            $t_id = isset($r['theme']) ? $r['theme']: 'default';
+            $t_id = isset($r['theme']) ? $r['theme'] : 'default';
             if (!isset($themes[$t_id])) {
                 $t_id = 'default';
             }
             $r['theme'] = $t_id;
             $themes[$t_id]['is_used'] = true;
-            if (isset($r['theme_mobile'])) {
+            if (isset($r['theme_mobile']) && isset($themes[$r['theme_mobile']])) {
                 $themes[$r['theme_mobile']]['is_used'] = true;
             }
             $url = $r['_url'];
@@ -259,21 +278,23 @@ class waDesignActions extends waActions
         $routes = wa()->getRouting()->getByApp($this->getAppId());
 
         $result = array();
+        $idna = new waIdna();
         foreach ($routes as $d => $domain_routes) {
             foreach (array_reverse($domain_routes, true) as $route_id => $route) {
                 $route['_id'] = $route_id;
                 $route['_domain'] = $d;
                 $route['_url'] = waRouting::getUrlByRoute($route, $d);
                 $route['_url_title'] = $d.'/'.waRouting::clearUrl($route['url']);
+                $route['_domain_decoded'] = $idna->decode($d);
                 $result[] = $route;
             }
         }
         return $result;
     }
 
-
     public function saveAction()
     {
+
         $app_id = $this->getAppId();
         $theme_id = waRequest::get('theme_id');
         $file = waRequest::get('file');
@@ -285,57 +306,66 @@ class waDesignActions extends waActions
 
         // copy original theme
         $theme = new waTheme($theme_id, $app_id);
-        if ($theme['type'] == waTheme::ORIGINAL) {
-            $theme->copy();
-        }
+        try {
+            if ($theme['type'] == waTheme::ORIGINAL) {
+                $theme->copy();
+            }
 
-        // create file
-        if (!$file) {
-            // parent
-            if (waRequest::post('type')) {
-                $file = waRequest::post('parent');
-                $theme->addFile($file, '', array('parent' => 1));
-            } else {
-                $file = waRequest::post('file');
-                if ($this->checkFile($file, $errors)) {
-                    $theme->addFile($file, waRequest::post('description'));
-                }
-            }
-            if (!$errors) {
-                if (!$theme->save()) {
-                    $errors = _ws('Insufficient file access permissions to save theme settings');
+            // create file
+            if (!$file) {
+                // parent
+                if (waRequest::post('type')) {
+                    $file = waRequest::post('parent');
+                    $theme->addFile($file, '', array('parent' => 1));
                 } else {
-                    $this->logAction('template_add', $file);
-                }
-            }
-        } else {
-            if (waRequest::post('file') && $file != waRequest::post('file')) {
-                if (!$this->checkFile(waRequest::post('file'), $errors)) {
-                    $this->displayJson(array(), $errors);
-                    return;
-                }
-                $theme->removeFile($file);
-                $file = waRequest::post('file');
-                if (!$theme->addFile($file, waRequest::post('description'))->save()) {
-                    $errors = _ws('Insufficient file access permissions to save theme settings');
-                } else {
-                    $this->logAction('template_edit', $file);
-                }
-            } else {
-                $f = $theme->getFile($file);
-                if (!empty($theme['parent_theme_id']) && $f['parent']) {
-                    $theme = new waTheme($theme['parent_theme_id']);
-                    if ($theme['type'] == waTheme::ORIGINAL) {
-                        $theme->copy();
+                    $file = waRequest::post('file');
+                    if ($this->checkFile($file, $errors)) {
+                        $theme->addFile($file, waRequest::post('description'));
                     }
                 }
-                if (!$theme->changeFile($file, waRequest::post('description'))) {
-                    $errors = _ws('Insufficient file access permissions to save theme settings');
-                } else {
-                    $this->logAction('template_edit', $file);
+                if (!$errors) {
+                    if (!$theme->save()) {
+                        $errors = _ws('Insufficient file access permissions to save theme settings');
+                    } else {
+                        $this->logAction('template_add', $file);
+                    }
                 }
+            } else {
+                if (waRequest::post('file') && ($file != waRequest::post('file'))) {
+                    if (!$this->checkFile(waRequest::post('file'), $errors)) {
+                        $this->displayJson(array(), $errors);
+                        return;
+                    }
+                    $theme->removeFile($file);
+                    $file = waRequest::post('file');
+                    if (!$theme->addFile($file, waRequest::post('description'))->save()) {
+                        $errors = _ws('Insufficient file access permissions to save theme settings');
+                    } else {
+                        $this->logAction('template_edit', $file);
+                    }
+                } else {
+                    $f = $theme->getFile($file);
+                    if (empty($f)) {
+                        if ($this->checkFile($file, $errors)) {
+                            $errors = _ws('Insufficient file access permissions to save theme settings');
+                        }
+                    }
+                    if (!empty($theme['parent_theme_id']) && !empty($f['parent'])) {
+                        $theme = new waTheme($theme['parent_theme_id']);
+                        if ($theme['type'] == waTheme::ORIGINAL) {
+                            $theme->copy();
+                        }
+                    }
+                    if (!$theme->changeFile($file, waRequest::post('description'))) {
+                        $errors = _ws('Insufficient file access permissions to save theme settings');
+                    } else {
+                        $this->logAction('template_edit', $file);
+                    }
+                }
+                @touch($theme->getPath().'/'.waTheme::PATH);
             }
-            @touch($theme->getPath().'/'.waTheme::PATH);
+        } catch (waException $ex) {
+            $errors = $ex->getMessage();
         }
 
         $response = array();
@@ -361,6 +391,10 @@ class waDesignActions extends waActions
                         $r = @file_put_contents($file_path, $content);
                         if ($r !== false) {
                             $r = true;
+                            if (in_array($ext, array('css', 'js'))) {
+                                $theme['edition'] = true;
+                                $theme->save();
+                            }
                         }
                     } else {
                         $r = @touch($file_path);
@@ -403,19 +437,19 @@ HTACCESS;
             );
             return false;
         }
-        if (!preg_match("/^[a-z0-9_\.-]+$/", $file)) {
+        if (!preg_match("/^[a-z0-9_\.-]+$/i", $file)) {
             $errors = array(
-            _ws('Only latin characters (a—z, A—Z), numbers (0—9) and underline character (_) are allowed.'),
+                _ws('Only latin characters (a—z, A—Z), numbers (0—9) and underline character (_) are allowed.'),
                 'input[name=file]'
-                );
-                return false;
+            );
+            return false;
         }
         if (!preg_match("/\.(xml|xsl|html|js|css)$/i", $file)) {
             $errors = array(
-            _ws('File should have one of the allowed extensions:').' .html, .css, .js, .xml, .xsl',
+                _ws('File should have one of the allowed extensions:').' .html, .css, .js, .xml, .xsl',
                 'input[name=file]'
-                );
-                return false;
+            );
+            return false;
         }
         return true;
     }
@@ -432,6 +466,45 @@ HTACCESS;
         $this->logAction('template_delete', $file);
 
         $this->displayJson(array());
+    }
+
+    public function themeUpdateAction()
+    {
+        $theme_id = waRequest::get('theme');
+        $theme = new waTheme($theme_id);
+
+        if (waRequest::method() == 'post') {
+            if (!waRequest::post("parent_only")) {
+                if (waRequest::post('reset')) {
+                    foreach (waRequest::post('reset') as $f) {
+                        $theme->revertFile($f);
+                    }
+                }
+                $theme->update(false);
+            }
+
+            if ($theme->parent_theme && ($theme->parent_theme->type == waTheme::OVERRIDDEN)) {
+                if (waRequest::post('parent_reset')) {
+                    foreach (waRequest::post('parent_reset') as $f) {
+                        $theme->parent_theme->revertFile($f);
+                    }
+                }
+                $theme->parent_theme->update(false);
+            }
+            $this->displayJson(array());
+        } else {
+            $theme_original = new waTheme($theme_id, true, 'original');
+            $data = array(
+                'theme'                  => $theme,
+                'theme_original_version' => $theme_original->version
+            );
+            if ($theme->parent_theme && ($theme->version == $theme_original->version) && ($theme->parent_theme->type == waTheme::OVERRIDDEN)) {
+                $parent_theme_original = new waTheme($theme->parent_theme->id, $theme->parent_theme->app, 'original');
+                $data['theme_original_version'] = $parent_theme_original->version;
+                $data['parent_only'] = true;
+            }
+            $this->display($data, $this->getConfig()->getRootPath().'/wa-system/design/templates/ThemeUpdate.html');
+        }
     }
 
     public function themeUseAction()
@@ -465,10 +538,11 @@ HTACCESS;
             }
             $route_id++;
             $route = array(
-                'url' => $url,
-                'app' => $this->getAppId(),
-                'theme' => $theme_id,
+                'url'          => $url,
+                'app'          => $this->getAppId(),
+                'theme'        => $theme_id,
                 'theme_mobile' => $theme_id,
+                'locale'       => wa()->getLocale(),
             );
             if ($route['url'] == '*') {
                 $routes[$domain][$route_id] = $route;
@@ -484,17 +558,20 @@ HTACCESS;
             }
         } else {
             list($domain, $route_id) = explode('|', $route);
-            $routes[$domain][$route_id]['theme'] = $theme_id;
+            if (!waRequest::post('mobile_only')) {
+                $routes[$domain][$route_id]['theme'] = $theme_id;
+            }
             $routes[$domain][$route_id]['theme_mobile'] = $theme_id;
         }
 
         waUtils::varExportToFile($routes, $path);
         $this->displayJson(array(
             'domain' => $domain,
-            'route' => $route_id,
-            'theme' => $theme_id
+            'route'  => $route_id,
+            'theme'  => $theme_id
         ));
     }
+
 
     public function themeAction()
     {
@@ -510,32 +587,52 @@ HTACCESS;
         foreach ($apps as $theme_app_id => $app) {
             if (!empty($app['themes']) && ($themes = wa()->getThemes($theme_app_id))) {
                 $themes_data = array();
-                foreach($themes as $id => $theme) {
-                    if (($app_id == $theme_app_id) && ($theme_id == $id) ) {
+                foreach ($themes as $id => $theme) {
+                    if (($app_id == $theme_app_id) && ($theme_id == $id)) {
                         $current_theme = $theme;
                     }
                     $themes_data[$id] = $theme->name;
                 }
                 if ($themes_data) {
                     $parent_themes[$theme_app_id] = array(
-                            'name'=>$app['name'],
-                            'img'=>$app['img'],
-                            'themes'=>$themes_data,
+                        'name'   => $app['name'],
+                        'img'    => $app['img'],
+                        'themes' => $themes_data,
                     );
                 }
             }
         }
         if (!$current_theme) {
-            if(isset($parent_themes[$app_id]) && count($parent_themes[$app_id]['themes']) && ($default = key($parent_themes[$app_id]['themes']))) {
-                $this->displayJson(array('redirect'=>"{$this->design_url}theme={$default}&action=theme"));
+            if (isset($parent_themes[$app_id]) && count($parent_themes[$app_id]['themes']) && ($default = key($parent_themes[$app_id]['themes']))) {
+                $this->displayJson(array('redirect' => "{$this->design_url}theme={$default}&action=theme"));
             } else {
-                $this->displayJson(array('redirect'=>$this->themes_url));
+                $this->displayJson(array('redirect' => $this->themes_url));
             }
         } else {
+            $current_locale = null;
+            $routes = $this->getRoutes();
+            $theme_routes = array();
+            $preview_url = false;
+            foreach ($routes as $r) {
+                if ((waRequest::get('route') == $r['_id']) && !empty($r['locale'])) {
+                    $current_locale = $r['locale'];
+                }
+                if (!$preview_url && $r['app'] == $app_id) {
+                    $preview_url = $r['_url'].'?theme_hash='.$this->getThemeHash().'&set_force_theme='.$theme_id;
+                }
+            }
+            $settings = $current_theme->getSettings(false, $current_locale);
 
-            $settings = $current_theme->getSettings();
+            try {
+                // Make sure parent theme is accessible
+                $current_theme->parent_theme;
+            } catch (waException $e) {
+                $current_theme->parent_theme = 'default';
+                $current_theme->save();
+            }
+
             if ($current_theme->parent_theme) {
-                $parent_settings = $current_theme->parent_theme->getSettings();
+                $parent_settings = $current_theme->parent_theme->getSettings(false, $current_locale);
                 foreach ($parent_settings as &$s) {
                     $s['parent'] = 1;
                 }
@@ -546,12 +643,15 @@ HTACCESS;
                 $settings = $parent_settings;
             }
 
-            $routes = $this->getRoutes();
-            $theme_routes = array();
-            $preview_url = false;
-            foreach ($routes as $r) {
-                if (!$preview_url && $r['app'] == $app_id) {
-                    $preview_url = $r['_url'].'?theme_hash='.$this->getThemeHash().'&set_force_theme='.$theme_id;
+            $settings = $this->convertSettingsToTree($settings);
+            unset($settings['level']);
+
+            $global_group_divideres = array();
+            if (!empty($settings['items'])) {
+                foreach ($settings['items'] as $index => $setting) {
+                    if ($setting['control_type'] == 'group_divider' && $setting['level'] == 1 && !empty($setting['items'])) {
+                        $global_group_divideres[$index] = $setting['name'];
+                    }
                 }
             }
 
@@ -559,7 +659,10 @@ HTACCESS;
                 if (empty($r['theme'])) {
                     $r['theme'] = 'default';
                 }
-                if ($r['theme'] == $theme_id) {
+                if (empty($r['theme_mobile'])) {
+                    $r['theme_mobile'] = 'default';
+                }
+                if (($r['theme'] == $theme_id) || ($r['theme_mobile'] == $theme_id)) {
                     $theme_routes[] = $r;
                 }
             }
@@ -579,24 +682,192 @@ HTACCESS;
                 }
             }
 
+            $theme_original_version = false;
+            $original_warning_requirements = array();
+            if ($current_theme['type'] == waTheme::OVERRIDDEN) {
+                $theme_original = new waTheme($current_theme->id, $current_theme->app_id, waTheme::ORIGINAL);
+                $theme_original_version = $theme_original->version;
+                $original_warning_requirements = $theme_original->getWarningRequirements();
+            }
+
+            $theme_parent_original_version = false;
+            if ($current_theme->parent_theme && $current_theme->parent_theme->type == waTheme::OVERRIDDEN) {
+                $theme_parent_original = new waTheme($current_theme->parent_theme->id, $current_theme->parent_theme->app_id, waTheme::ORIGINAL);
+                $theme_parent_original_version = $theme_parent_original->version;
+            }
+
+            $support = $current_theme['support'];
+            // Parse support from parent theme
+            if (empty($support) && $current_theme->parent_theme && !empty($current_theme->parent_theme['support'])) {
+                $support = $current_theme->parent_theme['support'];
+            }
+
+            // Prepare support website or email
+            if (!empty($support)) {
+                $email_validator = new waEmailValidator();
+                if ($email_validator->isValid($support) && !preg_match('~^https?://~', $support)) {
+                    $support = 'mailto:'.$support;
+                } else {
+                    if (!preg_match('~^https?://~', $support)) {
+                        $support = 'http://'.$support;
+                    }
+                }
+            }
+
+            // Parse instruction from parent theme
+            $instruction = $current_theme['instruction'];
+            if (empty($instruction) && $current_theme->parent_theme && !empty($current_theme->parent_theme['instruction'])) {
+                $instruction = $current_theme->parent_theme['instruction'];
+            }
+
+            // Prepare instruction site
+            if (!empty($instruction) && !preg_match('~^https?://~', $instruction)) {
+                $instruction = 'http://'.$instruction;
+            }
+
+            $theme_warning_requirements = $current_theme->getWarningRequirements();
+
+            $theme_parent_warning_requirements = false;
+            if ($current_theme->parent_theme) {
+                $theme_parent_warning_requirements = $current_theme->parent_theme->getWarningRequirements();
+            }
+
             $this->display(array(
-                'routes' => $routes,
-                'domains' => wa()->getRouting()->getDomains(),
-                'preview_url' => $preview_url,
-                'settings' => $settings,
-                'design_url' => $this->design_url,
-                'app' => wa()->getAppInfo($app_id),
-                'theme' => $current_theme,
-                'options' => $this->options,
-                'parent_themes' => $parent_themes,
-                'theme_routes' => $theme_routes,
-                'path'=>waTheme::getThemesPath($app_id),
-                'cover' => $cover,
-                'route_url' => $route_url
+                'current_locale'                      => $current_locale,
+                'routes'                              => $routes,
+                'domains'                             => wa()->getRouting()->getDomains(),
+                'preview_url'                         => $preview_url,
+                'global_group_divideres'              => $global_group_divideres,
+                'settings'                            => $settings,
+                'design_url'                          => $this->design_url,
+                'app'                                 => wa()->getAppInfo($app_id),
+                'theme'                               => $current_theme,
+                'support'                             => $support,
+                'instruction'                         => $instruction,
+                'theme_warning_requirements'          => $theme_warning_requirements,
+                'theme_original_warning_requirements' => $original_warning_requirements,
+                'theme_original_version'              => $theme_original_version,
+                'theme_parent_original_version'       => $theme_parent_original_version,
+                'theme_parent_warning_requirements'   => $theme_parent_warning_requirements,
+                'options'                             => $this->options,
+                'parent_themes'                       => $parent_themes,
+                'theme_routes'                        => $theme_routes,
+                'path'                                => waTheme::getThemesPath($app_id),
+                'cover'                               => $cover,
+                'route_url'                           => $route_url,
+                'apps'                                => wa()->getApps(),
             ), $this->getConfig()->getRootPath().'/wa-system/design/templates/Theme.html');
         }
     }
 
+
+    /**
+     * Convert flat list of theme settings into hierarchical tree structure
+     * based on group divider levels.
+     *
+     * Each group_divider is allowed to have several "normal" settings at the begining
+     * of its child 'items' array, and then may have several child group_dividers.
+     * It is never allowed to alternate between group_dividers and "normal" settings.
+     *
+     * Ignores 'level' of everything except group_dividers. All items other than
+     * group_dividers are treated as children of previous group_divider.
+     *
+     * @param array $settings_items
+     * @return array
+     * @throws waException
+     */
+    protected function convertSettingsToTree($settings_items)
+    {
+        if (empty($settings_items)) {
+            return array();
+        }
+
+        // Insert initial fake divider if settings do not start with divider already
+        $first_item = reset($settings_items);
+        if ($first_item['control_type'] != 'group_divider') {
+            array_unshift($settings_items, array(
+                'var'          => waTheme::GENERAL_SETTINGS_DIVIDER,
+                'control_type' => 'group_divider',
+                'value'        => '',
+                'group'        => '',
+                'level'        => 1,
+                'name'         => _ws('General settings'),
+            ));
+        }
+
+        // First pass: put each setting into 'items' array of previous divider.
+        // This does not create hierarchical structure yet, just moves non-dividers into groups
+        // created by dividers
+        $dividers_list = array();
+        $last_divider = null;
+        foreach($settings_items as $setting_var => $item) {
+            $item['var'] = $setting_var;
+            $item['level'] = ($item['level'] < 1) ? 1 : $item['level'];
+            $item['level'] = ($item['level'] > 6) ? 6 : $item['level'];
+            if ($item['control_type'] != 'group_divider') {
+                if ($last_divider === null) {
+                    throw new waException('this can not happen');
+                }
+                $last_divider['items'][$setting_var] = $item;
+            } else {
+                if (!isset($item['level']) || $item['level'] <= 0) {
+                    throw waException::dump('Level is not set for', $item);
+                }
+                unset($last_divider);
+                $item['items'] = array();
+                $last_divider = $item;
+                $dividers_list[] =& $last_divider;
+            }
+        }
+
+        // Second pass: create hierarchical structure out of group_dividers in $dividers_list
+        list($root, $_) = $this->oneTreeItemFrom($dividers_list, 0);
+        return $root;
+    }
+
+    /**
+     * Build a single tree section of given level from the start of $dividers_list (consuming items).
+     * Return [ new_tree_section, rest_of_$dividers_list ]
+     * @param array $dividers_list
+     * @param int $needed_level
+     * @return array
+     */
+    protected function oneTreeItemFrom($dividers_list, $needed_level)
+    {
+        // Can not build shit from empty list
+        if (!$dividers_list) {
+            return array(null, array());
+        }
+        // Can not build item of higher level if first item has lower level
+        $first_item = reset($dividers_list);
+        if ($first_item['level'] <= $needed_level - 1) {
+            return array(null, $dividers_list);
+        }
+
+        if ($first_item['level'] == $needed_level) {
+            // Start either from the first item in list if its level
+            // is what we need...
+            $item = array_shift($dividers_list);
+        } else {
+            // ...otherwise create an intermediate fake item of needed level
+            $item = array(
+                'level' => $needed_level,
+                'items' => array(),
+            );
+        }
+
+        // Extract items from the begining of $dividers_list
+        // until they fit into our $item (i.e. belong under the $needed_level)
+        // As soon as we meet something <= $needed_level, this loop stops.
+        do {
+            list($child_item, $dividers_list) = $this->oneTreeItemFrom($dividers_list, $item['level'] + 1);
+            if ($child_item) {
+                $item['items'][] = $child_item;
+            }
+        } while ($child_item);
+
+        return array($item, $dividers_list);
+    }
 
     public function themeAboutAction()
     {
@@ -607,15 +878,14 @@ HTACCESS;
         $template = $this->getConfig()->getRootPath().'/wa-system/design/templates/ThemeAbout.html';
         $this->display(array(
             'design_url' => $this->design_url,
-            'app_id' => $app_id,
-            'app' => $app,
-            'theme_id' => $theme_id,
-            'theme' => $theme,
-            'options' => $this->options,
+            'app_id'     => $app_id,
+            'app'        => $app,
+            'theme_id'   => $theme_id,
+            'theme'      => $theme,
+            'options'    => $this->options,
         ), $template);
 
     }
-
 
     public function themesAction()
     {
@@ -625,14 +895,14 @@ HTACCESS;
         $template = $this->getConfig()->getRootPath().'/wa-system/design/templates/Themes.html';
 
         $this->display(array(
-            'routes' => $this->getRoutes(),
-            'domains' => wa()->getRouting()->getDomains(),
-            'design_url' => $this->design_url,
-            'themes_url' => $this->themes_url,
+            'routes'        => $this->getRoutes(),
+            'domains'       => wa()->getRouting()->getDomains(),
+            'design_url'    => $this->design_url,
+            'themes_url'    => $this->themes_url,
             'template_path' => $this->getConfig()->getRootPath().'/wa-system/design/templates/',
-            'app_id' => $app_id,
-            'app' => $app,
-            'options' => $this->options,
+            'app_id'        => $app_id,
+            'app'           => $app,
+            'options'       => $this->options,
         ), $template);
     }
 
@@ -642,9 +912,9 @@ HTACCESS;
             $theme_id = waRequest::get('theme');
             $theme = new waTheme($theme_id);
             if ($theme->parent_theme && waRequest::post('parent_settings')) {
-                $this->saveThemeSettings($theme->parent_theme, waRequest::post('parent_settings'), waRequest::file('parent_image'));
+                $this->saveThemeSettings($theme->parent_theme, waRequest::post('parent_settings'), waRequest::file('parent_image'), waRequest::post('locale'));
             }
-            $this->saveThemeSettings($theme, waRequest::post('settings'), waRequest::file('image'));
+            $this->saveThemeSettings($theme, waRequest::post('settings', array(), 'array'), waRequest::file('image'), waRequest::post('locale'));
             $this->displayJson(array());
         } catch (waException $e) {
             $this->displayJson(array(), $e->getMessage());
@@ -657,9 +927,13 @@ HTACCESS;
      * @param waRequestFileIterator $files
      * @throws waException
      */
-    protected function saveThemeSettings(waTheme $theme, $settings, $files)
+    protected function saveThemeSettings(waTheme $theme, $settings, $files, $locale = null)
     {
+        if ($theme->type == waTheme::ORIGINAL) {
+            $theme->copy();
+        }
         $old_settings = $theme['settings'];
+        $edition = false;
         foreach ($files as $k => $f) {
             /**
              * @var waRequestFile $f
@@ -668,11 +942,15 @@ HTACCESS;
                 $error = '';
                 $filename = str_replace('*', $f->extension, $old_settings[$k]['filename']);
                 if ($this->uploadImage($f, $theme->path.'/'.$filename, $error)) {
-                    $settings[$k] = $filename;
+                    $settings[$k] = $filename. '?v'. time();
+                    $edition = true;
                 } elseif ($error) {
                     throw new waException($error);
                 }
             }
+        }
+        if ($edition) {
+            $theme['edition'] = true;
         }
         $theme['settings'] = $settings;
         $theme->save();
@@ -722,12 +1000,72 @@ HTACCESS;
     public function themeDownloadAction()
     {
         $theme_id = waRequest::get('theme');
-        $theme = new waTheme($theme_id, $this->getAppId());
+        $app_id = waRequest::get('app_id', $this->getAppId());
+        $theme = new waTheme($theme_id, $app_id);
         $this->logAction('theme_download', $theme_id);
         $target_file = $theme->compress(wa()->getTempPath("themes"));
         waFiles::readFile($target_file, basename($target_file), false);
-        waFiles::delete($target_file);
-        $this->displayJson(array());
+        try {
+            waFiles::delete($target_file);
+        } catch (Exception $ex) {
+
+        }
+    }
+
+    public function themeExportSettingsAction()
+    {
+        $theme_id = waRequest::get('theme');
+        $app_id = waRequest::get('app_id', $this->getAppId());
+        $theme = new waTheme($theme_id, $app_id);
+        $target_file = $theme->compressSettings(wa()->getTempPath("themes"));
+        waFiles::readFile($target_file, basename($target_file), false);
+        try {
+            waFiles::delete($target_file);
+        } catch (Exception $ex) {
+
+        }
+    }
+
+    public function themeImportSettingsAction()
+    {
+        $theme_id = waRequest::get('theme');
+        $app_id = waRequest::get('app_id', $this->getAppId());
+        $theme = new waTheme($theme_id, $app_id);
+
+        if ($archive = waRequest::file('theme_settings')) {
+            $archive_extension = pathinfo($archive->name, PATHINFO_EXTENSION);
+            if ($archive_extension !== 'gz') {
+                try {
+                    waFiles::delete($archive->tmp_name);
+                } catch (waException $e) {
+
+                }
+                return $this->displayJson(array(), _ws('Invalid archive'));
+            }
+
+            /**
+             * @var waRequestFile
+             */
+            if ($archive->uploaded()) {
+                $archive_path = wa()->getDataPath('design/settings/import/').$archive->name;
+                $archive->moveTo($archive_path);
+                try {
+                    $theme->extractSettings($archive_path);
+                    //$this->logAction('theme_upload', $theme->id);
+                    $this->displayJson(array('theme' => $theme_id));
+                } catch (Exception $e) {
+                    $this->displayJson(array(), $e->getMessage());
+                }
+            } else {
+                $message = $archive->error;
+                if (!$message) {
+                    $message = 'Error while file upload';
+                }
+                $this->displayJson(array(), $message);
+            }
+        } else {
+            $this->displayJson(array(), 'Error while file upload');
+        }
     }
 
     protected function themeRenameAction()
@@ -738,7 +1076,7 @@ HTACCESS;
                 'name' => waRequest::post('name')
             ))->id;
             $this->logAction('theme_rename');
-            $this->displayJson(array('redirect'=>"{$this->design_url}theme={$id}&action=theme"));
+            $this->displayJson(array('redirect' => "{$this->design_url}theme={$id}&action=theme"));
         } catch (waException $e) {
             $this->displayJson(array(), $e->getMessage());
         }
@@ -747,7 +1085,7 @@ HTACCESS;
     public function themeParentAction()
     {
         try {
-            if($id = waRequest::post('id')) {
+            if ($id = waRequest::post('id')) {
                 $theme = new waTheme($id);
                 $theme->parent_theme_id = waRequest::post('parent_theme_id');
                 $theme->save();
@@ -763,10 +1101,13 @@ HTACCESS;
     {
         try {
             $theme = new waTheme(waRequest::post('theme'));
-            $duplicate = $theme->duplicate();
+            $duplicate = $theme->duplicate(!!waRequest::post('related'), (array)waRequest::post('options'));
             $this->logAction('theme_duplicate', $theme->id);
-            $this->displayJson(array('redirect'=>"{$this->design_url}theme={$duplicate->id}&action=theme"));
-        } catch (waException $e) {
+            $data = array(
+                'redirect' => "{$this->design_url}theme={$duplicate->id}&action=theme",
+            );
+            $this->displayJson($data);
+        } catch (Exception $e) {
             $this->displayJson(array(), $e->getMessage());
         }
     }
@@ -807,7 +1148,7 @@ HTACCESS;
             $theme = new waTheme($theme_id);
             $theme->purge();
             $this->logAction('theme_delete', $theme_id);
-            $this->displayJson(array('redirect'=>$this->design_url,'theme_id'=>$theme_id));
+            $this->displayJson(array('redirect' => $this->design_url, 'theme_id' => $theme_id));
         } catch (waException $e) {
             $this->displayJson(array(), $e->getMessage());
         }
@@ -830,7 +1171,7 @@ HTACCESS;
                 }
             } else {
                 $message = $file->error;
-                if(!$message){
+                if (!$message) {
                     $message = 'Error while file upload';
                 }
                 $this->displayJson(array(), $message);
@@ -867,6 +1208,11 @@ HTACCESS;
         $this->display(array(
             'file' => $file
         ), $template);
+    }
+
+    public function getDesignUrl()
+    {
+        return $this->design_url;
     }
 
     protected function getView()

@@ -128,16 +128,22 @@ class blogHelper
     }
 
     /**
+     * Extend items by adding contact info into $rows[i]['user']
+     * Uses:
+     * - $rows[i]['contact_id']
+     * - $rows[i]['name'] or $rows[i]['contact_name'] when contact is not found or its name is empty
+     * - $rows[i]['auth_provider'] for default userpic URL
      *
-     * Extend items by contact info
      * @param array $rows
      * @param array $fields
-     * @param bool $get_link
+     * @param bool $get_link pass true to get $rows[i]['user']['posts_link']
      */
     public static function extendUser(&$rows, $fields = array(), $get_link = false)
     {
-        $default_fields = array('id', 'name',);
+        $default_fields = array('id', 'name', 'firstname', 'middlename', 'lastname');
         $fields = array_unique(array_merge($fields, $default_fields));
+
+        // All contact ids
         $ids = array();
         foreach ($rows as $row) {
             if ($row['contact_id']) {
@@ -146,8 +152,11 @@ class blogHelper
         }
         $ids = array_unique($ids);
 
+        // Fetch contacts using collection
         $collection = new waContactsCollection($ids);
         $contacts = $collection->getContacts(implode(',', $fields), 0, count($ids));
+
+        // Prepare data row to use as a placeholder when contact is not found
         $contact = new waContact(0);
         $contacts[0] = array('name' => '');
         $photo_fields = array();
@@ -160,8 +169,14 @@ class blogHelper
             }
         }
 
-        $app_static_url = wa()->getAppStaticUrl();
+        // Format contact names
+        foreach($contacts as &$c) {
+            $c['name'] = waContactNameField::formatName($c);
+        }
+        unset($c);
 
+        // Add data as 'user' key to each row in $rows
+        $root_url = wa()->getRootUrl();
         foreach ($rows as &$row) {
             $row['user'] = array();
             $id = $row['contact_id'] = max(0, intval($row['contact_id']));
@@ -182,7 +197,11 @@ class blogHelper
                 }
                 if (isset($row['auth_provider'])) {
                     if ($row['auth_provider'] && ($row['auth_provider'] != blogCommentModel::AUTH_GUEST)) {
-                        $row['user']['photo_url'] = "{$app_static_url}img/{$row['auth_provider']}.png";
+                        if ($row['auth_provider'] == blogCommentModel::AUTH_USER) {
+                            $row['user']['photo_url'] = "{$root_url}wa-content/img/users/user.png";
+                        } else {
+                            $row['user']['photo_url'] = "{$root_url}wa-content/img/auth/{$row['auth_provider']}.png";
+                        }
                         foreach ($photo_fields as $field) {
                             $row['user'][$field] = & $row['user']['photo_url'];
                         }
@@ -371,7 +390,7 @@ class blogHelper
         if (isset($item['icon'])) {
             if (strpos($item['icon'], '.')) {
                 $item['icon_url'] = $item['icon'];
-                $item['icon_html'] = '<i class="icon16" style="background-image: url(\''.$item['icon'].'\'); background-repeat: no-repeat; background-size: auto auto;"'.$title.'></i>';
+                $item['icon_html'] = '<i class="icon16" style="background-image: url(\''.$item['icon'].'\'); background-repeat: no-repeat; background-size: 16px; background-position: center center;"'.$title.'></i>';
             } else {
                 $item['icon_url'] = false;
                 $item['icon_html'] = '<i class="icon16 '.$item['icon'].'"'.$title.'></i>';
@@ -455,7 +474,8 @@ class blogHelper
             if ($blog_id) {
                 $params['blog_url_type'] = $blog_id;
             }
-            $url = wa()->getRouteUrl($route_rule, $params, $absolute);
+            $url = wa()->getRouteUrl($route_rule, $params, $absolute,
+                $absolute ? wa()->getRouting()->getDomain(null, true, false) : null);
         }
         return $url;
     }

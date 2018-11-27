@@ -17,7 +17,8 @@ class waMailDecode
     protected $options = array(
         'buffer_size' => 16384,
         'headers_only' => false,
-        'attach_path' => ''
+        'max_attachments' => 10,
+        'attach_path' => '',
     );
 
     const STATE_START = 1;
@@ -33,6 +34,8 @@ class waMailDecode
     const TYPE_PART = 3;
     const TYPE_ATTACH = 4;
 
+    const TEMP_NEW_LINE = "@///NEW-LINE///@";
+
     protected $source;
     protected $state;
 
@@ -46,8 +49,7 @@ class waMailDecode
     protected $part_index = 0;
     protected $is_last = false;
 
-    protected $body = array(
-    );
+    protected $body = array();
 
     protected $current_header;
 
@@ -56,20 +58,17 @@ class waMailDecode
         $this->options = $options + $this->options;
     }
 
-    /** Parse a decoded email header into [name => ..., email => ..., full => ...] */
+    /** Parse a decoded email header into list of arrays [name => ..., email => ..., full => ...] */
     public static function parseAddress($header)
     {
         $v = $header;
         try {
             $parser = new waMailAddressParser($v);
             $v = $parser->parse();
-            if (isset($v[0])) {
-                $v = $v[0];
-            }
         } catch (Exception $e) {
             if (preg_match('~<([^>]+)>~', $v, $m)) {
                 $email = $m[1];
-            } else if (preg_match('~(\S+\@\S+)~', $v, $m)) {
+            } elseif (preg_match('~(\S+\@\S+)~', $v, $m)) {
                 $email = $m[1];
             } else {
                 $email = explode(' ', $v);
@@ -77,9 +76,9 @@ class waMailDecode
             }
 
             $name = trim(preg_replace('~<?'.preg_quote($email, '~').'>?~', '', $v));
-            $v = array('name' => $name, 'email' => $email);
+            $v = array(array('name' => $name, 'email' => $email));
         }
-        $v['full'] = $header;
+        //$v[0]['full'] = $header;
         return $v;
     }
 
@@ -98,6 +97,7 @@ class waMailDecode
         $this->state = self::STATE_HEADER;
         $this->parts = array(array());
         $this->attachments = array();
+        $this->part_index = 0;
         $this->body = array();
         $this->part = &$this->parts[0];
         // check end of file
@@ -107,7 +107,7 @@ class waMailDecode
                 if (!$part) {
                     if ($this->is_last) {
                         fclose($this->source);
-                        throw new waException("Письмо не было завершено, а данные в файле уже кончились.");
+                        throw new waException("Letter was not completed, but there are no more data in file.");
                     }
                     $this->read();
                 }
@@ -118,18 +118,20 @@ class waMailDecode
             }
             if (!$this->is_last) {
                 if (!$this->options['headers_only']) {
-                    fclose($this->source);
-                    throw new waException("Конец письма уже достигнут. Есть какие-то данные еще.");
+                    if ($this->options['max_attachments'] >= 0 && count($this->attachments) < $this->options['max_attachments']) {
+                        fclose($this->source);
+                        throw new waException("End of letter reached. There are some more data.");
+                    }
                 }
             }
         }
         fclose($this->source);
 
-
         $headers = $this->parts[0]['headers'];
+
         foreach ($headers as $h => &$v) {
             if (is_array($v)) {
-                $v = implode("\n", $v);
+                $v = implode(self::TEMP_NEW_LINE, $v);
             }
             $v = $this->decodeHeader($v);
             if ($h == 'subject') {
@@ -139,12 +141,17 @@ class waMailDecode
             } elseif ($h == 'date') {
                 $v = preg_replace("/[^a-z0-9:,\.\s\t\+-]/i", '', $v);
                 $v = date("Y-m-d H:i:s", strtotime($v));
-            } elseif ($h == 'to' || $h == 'cc' || $h == 'from' || $h == 'reply-to') {
+            } elseif ($h == 'to' || $h == 'cc' || $h == 'bcc') {
                 $v = self::parseAddress($v);
+            } elseif ($h == 'from' || $h == 'reply-to') {
+                $v = self::parseAddress($v);
+                if (isset($v[0])) {
+                    $v = $v[0];
+                }
             }
         }
         unset($v);
-        foreach (array('subject','from', 'to', 'cc', 'reply-to', 'date') as $h) {
+        foreach (array('subject','from', 'to', 'cc', 'bcc', 'reply-to', 'date') as $h) {
             if (!isset($headers[$h])) {
                 $headers[$h] = '';
             }
@@ -212,22 +219,25 @@ class waMailDecode
         $html = preg_replace("/href=(['\"]).*?javascript:(.*)?\\1/i", "onclick=' $2 '", $html);
 
         //remove javascript from tags
-        $pattern = "/<(.*)?javascript.*?\(.*?((?>[^()]+)|(?R)).*?\)?\)(.*)?>/i";
-        while (preg_match($pattern, $html)) {
-            $html = preg_replace($pattern, "<$1$3$4$5>", $html);
+        if (preg_match('/javascript/i', $html)) {
+            $pattern = "/<(.*)?javascript.*?\(.*?((?>[^()]+)|(?R)).*?\)?\)(.*)?>/i";
+            while (preg_match($pattern, $html, $m)) {
+                $html = preg_replace($pattern, "<$1$3$4$5>", $html);
+            }
         }
+        if (preg_match('/:expr/i', $html)) {
+            // dump expressions from contibuted content
+            $html = preg_replace("/:expression\(.*?((?>[^(.*?)]+)|(?R)).*?\)\)/i", "", $html);
 
-        // dump expressions from contibuted content
-        $html = preg_replace("/:expression\(.*?((?>[^(.*?)]+)|(?R)).*?\)\)/i", "", $html);
-
-        $pattern = "/<(.*)?:expr.*?\(.*?((?>[^()]+)|(?R)).*?\)?\)(.*)?>/i";
-        while (preg_match($pattern, $html)) {
-            $html = preg_replace($pattern, "<$1$3$4$5>", $html);
+            $pattern = "/<(.*)?:expr.*?\(.*?((?>[^()]+)|(?R)).*?\)?\)(.*)?>/i";
+            while (preg_match($pattern, $html)) {
+                $html = preg_replace($pattern, "<$1$3$4$5>", $html);
+            }
         }
         // remove all on* events
         $pattern = "/<([^>]*)?[\s\r\n\t]on.+?=?\s?.+?(['\"]).*?\\2\s?(.*)?>/i";
         while (preg_match($pattern, $html)) {
-           $html = preg_replace($pattern, "<$1$3>", $html);
+            $html = preg_replace($pattern, "<$1$3>", $html);
         }
         return $html;
     }
@@ -240,7 +250,7 @@ class waMailDecode
         do {
             $email .= $data;
             if (strpos($email, '@') !== false &&
-               (strpos($email, '"') === false || (strpos($email, '"') !== strrpos($email, '"')))
+                (strpos($email, '"') === false || (strpos($email, '"') !== strrpos($email, '"')))
             ) {
                 $result[] = trim($email);
                 $email = '';
@@ -254,7 +264,6 @@ class waMailDecode
         $this->buffer .= fread($this->source, $this->options['buffer_size']);
         $this->is_last = feof($this->source);
     }
-
 
     protected function parse()
     {
@@ -287,7 +296,7 @@ class waMailDecode
                     $this->buffer_offset += 5;
                     $this->state = self::STATE_HEADER_VALUE;
                     return array(
-                        'type' => self::TYPE_HEADER,
+                        'type'  => self::TYPE_HEADER,
                         'value' => 'from ',
                     );
                 }
@@ -298,7 +307,7 @@ class waMailDecode
                     $this->state = self::STATE_HEADER_VALUE;
                     // return part info
                     return array(
-                        'type' => self::TYPE_HEADER,
+                        'type'  => self::TYPE_HEADER,
                         'value' => strtolower(trim($value))
                     );
                 } else {
@@ -320,7 +329,7 @@ class waMailDecode
                             $this->buffer_offset = $i;
                             $this->state = self::STATE_HEADER;
                             return array(
-                                'type' => self::TYPE_HEADER_VALUE,
+                                'type'  => self::TYPE_HEADER_VALUE,
                                 'value' => trim($value)
                             );
                         }
@@ -340,7 +349,7 @@ class waMailDecode
                     $this->part['headers']['content-transfer-encoding'] = 'quoted-printable';
                 }
                 if ($this->part['type'] == 'multipart') {
-                    $boundary = '--'.$this->part['params']['boundary'];
+                    $boundary = isset($this->part['params']['boundary']) ? '--'.$this->part['params']['boundary'] : "--";
                     if (($i = strpos($this->buffer, $boundary, $this->buffer_offset)) !== false) {
                         if (strlen($this->buffer) < $i + strlen($boundary)) {
                             return false;
@@ -349,7 +358,7 @@ class waMailDecode
                         if (substr($this->buffer, $this->buffer_offset, 2) == "--") {
                             if (isset($this->part['parent'])) {
                                 $this->part_index = $this->part['parent'];
-                                $this->part = &$this->parts[$this->part_index];
+                                $this->part = &$this->parts[$this->part['parent']];
                                 $this->buffer_offset += 2;
                                 $this->skipLineBreak();
                                 return true;
@@ -407,12 +416,12 @@ class waMailDecode
                             return array(
                                 'type' => self::TYPE_ATTACH,
                                 'value' => $this->buffer_offset,
-                                'boundary' => $this->parts[$this->part['parent']]['params']['boundary']
+                                'boundary' => isset($this->parts[$this->part['parent']]['params']['boundary']) ? $this->parts[$this->part['parent']]['params']['boundary'] : null,
                             );
                         }
                     }
                     // other parts
-                    $boundary = "\n--".$this->parts[$this->part['parent']]['params']['boundary'];
+                    $boundary = isset($this->parts[$this->part['parent']]['params']['boundary']) ? "\n--".$this->parts[$this->part['parent']]['params']['boundary'] : "\n--";
                     if (($i = strpos($this->buffer, $boundary, $this->buffer_offset)) === false) {
                         if ($this->is_last) {
                             $this->state = self::STATE_END;
@@ -472,6 +481,8 @@ class waMailDecode
                 }
                 break;
             case self::TYPE_HEADER_VALUE:
+                $part['value'] = $this->decodeHeader($part['value']);
+
                 if ($this->current_header == 'content-type') {
                     $info = $this->parseHeader($part['value']);
                     $this->part['type'] = strtolower(strtok($info['value'], '/'));
@@ -499,6 +510,10 @@ class waMailDecode
                 }
                 break;
             case self::TYPE_ATTACH:
+                if ($this->options['max_attachments'] >= 0 && count($this->attachments) >= $this->options['max_attachments']) {
+                    $this->state = self::STATE_END;
+                    break;
+                }
                 $boundary = "\n--".$part['boundary'];
                 if (!file_exists($this->options['attach_path'])) {
                     waFiles::create($this->options['attach_path']);
@@ -596,12 +611,12 @@ class waMailDecode
                             }
                         } else {
                             $charset = mb_detect_encoding($this->part['data']);
-                            if ($charset && strtolower($charset) != "utf-8" && $temp = iconv($charset, 'UTF-8', $this->part['data'])) {
+                            if ($charset && strtolower($charset) != "utf-8" && $temp = @iconv($charset, 'UTF-8', $this->part['data'])) {
                                 $this->part['data'] = $temp;
                                 unset($temp);
                             } elseif (!preg_match("//u", $this->part['data'])) {
                                 if (!$charset) {
-                                    $temp = iconv("windows-1251", "utf-8", $this->part['data']);
+                                    $temp = iconv("windows-1251", "utf-8//IGNORE", $this->part['data']);
                                     if (preg_match("/[а-я]/ui", $temp)) {
                                         $this->part['data'] = $temp;
                                     }
@@ -650,6 +665,7 @@ class waMailDecode
         }
         if (preg_match("/=\?(.+)\?(B|Q)\?(.*)\?=?(.*)/i", $value, $m)) {
             $value = ltrim($value);
+            $value = str_replace("\r", "", $value);
             if (isset($m[3]) && strpos($m[3], '_') !== false && strpos($m[3], ' ') === false) {
                 $value = iconv_mime_decode(str_replace("\n", "", $value), 0, 'UTF-8');
             } else {
@@ -661,14 +677,17 @@ class waMailDecode
                 }
             }
         } elseif (isset($this->part['params']['charset'])) {
-            $value = @iconv($this->part['params']['charset'], 'UTF-8', $value);
+            $value = iconv($this->part['params']['charset'], 'UTF-8//IGNORE', $value);
         }
         if (!preg_match('//u', $value)) {
             $charset = mb_detect_encoding($value);
-            if ($charset && $temp = iconv($charset, 'UTF-8', $value)) {
+            if ($charset && $temp = @iconv($charset, 'UTF-8', $value)) {
                 $value = $temp;
             }
         }
+
+        $value = str_replace(self::TEMP_NEW_LINE, "\n", $value);
+
         return $value;
     }
 
@@ -695,7 +714,7 @@ class waMailDecode
                     $temp_v = explode("''", $value);
                     $value = urldecode($temp_v[1]);
                     if (strtolower($temp_v[0]) != 'utf-8') {
-                        $value = iconv($temp_v[0], 'UTF-8', $value);
+                        $value = iconv($temp_v[0], 'UTF-8//IGNORE', $value);
                     }
                 }
                 $temp[$match[1]][$match[2]] = $value;

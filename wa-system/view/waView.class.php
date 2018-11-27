@@ -1,7 +1,6 @@
 <?php
 /**
  * Abstract View.
- * Абстрактный Вид.
  *
  * @package   wa-system
  * @category  view
@@ -28,7 +27,7 @@ abstract class waView
 
     /**
 	 * Initialize view properties.
-	 * 
+	 *
      * @param  waSystem $system  Instance of system object
      * @param  array    $options Configuration options
      * @return void
@@ -40,7 +39,7 @@ abstract class waView
 
     /**
 	 * Get helper object.
-	 * 
+	 *
      * @return waViewHelper
      */
     public function getHelper()
@@ -54,7 +53,7 @@ abstract class waView
 
     /**
 	 * Set view options.
-	 * 
+	 *
      * @param  array $options New configuration options
      * @return waView
      */
@@ -69,7 +68,7 @@ abstract class waView
 
     /**
 	 * Get template extension.
-	 * 
+	 *
      * @return string
      */
     public function getPostfix()
@@ -87,7 +86,7 @@ abstract class waView
 
     /**
 	 * Execute prepare render temaplate.
-	 * 
+	 *
      * @return waView
      */
     protected function prepare()
@@ -97,15 +96,21 @@ abstract class waView
 		// Add global variables
 		$this->assign(array(
 			'wa_url'            => $wa->getRootUrl(),
+            'wa_static_url'     => $this->getStaticUrl($wa->getRootUrl()),
 			'wa_backend_url'    => waSystem::getInstance()->getConfig()->getBackendUrl(true),
 			'wa_app'            => $wa->getApp(),
 			'wa_app_url'        => $wa->getAppUrl(null, true),
-			'wa_app_static_url' => $wa->getAppStaticUrl(),
+			'wa_app_static_url' => $this->getStaticUrl($wa->getAppStaticUrl()),
 			'wa'                => $this->getHelper()
 		));
 
 		// "Chainable" method
 		return $this;
+    }
+
+    protected function getStaticUrl($url)
+    {
+        return wa()->getCdn($url);
     }
 
     abstract public function fetch($template, $cache_id = null);
@@ -164,25 +169,35 @@ abstract class waView
     public function setThemeTemplate($theme, $template)
     {
         $this->assign('wa_active_theme_path', $theme->path);
-        $this->assign('wa_active_theme_url', $theme->url);
+        $this->assign('wa_active_theme_url', $this->getStaticUrl($theme->url));
         $theme_settings = $theme->getSettings(true);
+        $theme_settings_config = $theme->getSettings();
 
         $locales = $theme->getLocales();
 
-        $version = $theme->version();
+        $version = $theme->version(true);
 
         $file = $theme->getFile($template);
         if ($parent_theme = $theme->parent_theme) {
+            $edition = $theme->edition + $parent_theme->edition;
             if (!empty($file['parent'])) {
+                if ($parent_theme->version($edition) > $version) {
+                    $version = $parent_theme->version($edition);
+                } else {
+                    $version = $theme->version($edition);
+                }
                 $theme = $parent_theme;
             }
-            if ($theme->version() > $version) {
-                $version = $theme->version();
-            }
-            $this->assign('wa_parent_theme_url', $parent_theme->url);
+            $this->assign('wa_parent_theme_url', $this->getStaticUrl($parent_theme->url));
             $this->assign('wa_parent_theme_path', $parent_theme->path);
             if ($parent_settings = $parent_theme->getSettings(true)) {
                 $theme_settings = $theme_settings + $parent_settings;
+                foreach ($parent_theme->getSettings() as $k => $v) {
+                    if (!isset($theme_settings_config[$k])) {
+                        $v['parent'] = 1;
+                        $theme_settings_config[$k] = $v;
+                    }
+                }
             }
             if ($parent_theme->getLocales()) {
                 $locales += $parent_theme->getLocales();
@@ -191,7 +206,11 @@ abstract class waView
         $this->assign('wa_theme_version', $version);
         waLocale::setStrings($locales);
         $this->assign('theme_settings', $theme_settings);
-        $this->assign('wa_theme_url', $theme->url);
+        $this->assign('theme_settings_config', $theme_settings_config);
+
+        $this->assign('wa_theme_url', $this->getStaticUrl($theme->url));
+        $this->assign('wa_real_theme_url', $theme->url);
+
         $this->setTemplateDir($theme->path);
         return file_exists($theme->path.'/'.$template);
     }

@@ -16,6 +16,7 @@ return array(
         'contact_id' => array('int', 11, 'null' => 0),
         'thumb' => array('int', 11, 'null' => 0, 'default' => '0'),
         'sort' => array('int', 11, 'null' => 0, 'default' => '0'),
+        'key_photo_id' => array('int', 11),
         ':keys' => array(
             'PRIMARY' => 'id',
             'url' => array('parent_id', 'url', 'unique' => 1),
@@ -62,7 +63,7 @@ return array(
         'title' => array('varchar', 255, 'null' => 0, 'default' => ''),
         'url' => array('varchar', 255),
         'full_url' => array('varchar', 255),
-        'content' => array('text', 'null' => 0),
+        'content' => array('mediumtext', 'null' => 0),
         'create_datetime' => array('datetime', 'null' => 0),
         'update_datetime' => array('datetime', 'null' => 0),
         'create_contact_id' => array('int', 11, 'null' => 0),
@@ -100,9 +101,11 @@ return array(
         'stack_count' => array('int', 11, 'null' => 0, 'default' => '0'),
         'sort' => array('int', 11, 'null' => 0, 'default' => '0'),
         'source' => array('varchar', 32, 'null' => 0, 'default' => 'backend'),
+        'app_id' => array('varchar', 64),
         ':keys' => array(
             'PRIMARY' => 'id',
             'url' => array('url', 'unique' => 1),
+            'app_id' => 'app_id',
         ),
     ),
     'photos_photo_exif' => array(

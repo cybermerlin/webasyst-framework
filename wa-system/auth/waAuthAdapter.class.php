@@ -1,10 +1,10 @@
-<?php 
+<?php
 
 abstract class waAuthAdapter
 {
-    
+
     protected $options = array();
-    
+
     public function __construct($options = array())
     {
         if (is_array($options)) {
@@ -17,7 +17,7 @@ abstract class waAuthAdapter
     public function getControls()
     {
         return array(
-            'app_id' => 'App ID',
+            'app_id'     => 'App ID',
             'app_secret' => 'App Secret'
         );
     }
@@ -27,6 +27,14 @@ abstract class waAuthAdapter
         return isset($this->options[$name]) ? $this->options[$name] : $default;
     }
 
+    /**
+     * @return mixed
+     * @throws waAuthException
+     * @throws waAuthInvalidCredentialsException
+     * @throws waAuthConfirmEmailException
+     * @throws waAuthConfirmPhoneException
+     * @throws waException
+     */
     abstract public function auth();
 
     public function getId()
@@ -41,9 +49,11 @@ abstract class waAuthAdapter
         return ucfirst(substr($class, 0, -4));
     }
 
-    public function getIcon()
+    public function getIcon($prefix = 'circle', $ext = 'svg')
     {
-        return wa()->getRootUrl().'wa-content/img/auth/'.$this->getId().'.png';
+        $prefix = $prefix ? '-'.htmlspecialchars($prefix) : null;
+        $ext = $ext === 'png' ? 'png' : 'svg';
+        return wa()->getRootUrl().'wa-content/img/auth/'.$this->getId().$prefix.'.'.$ext;
     }
 
     public function getUrl()
@@ -64,7 +74,7 @@ abstract class waAuthAdapter
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 25);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
             $content = curl_exec($ch);
             $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
@@ -75,15 +85,25 @@ abstract class waAuthAdapter
 
     protected function post($url, $post_data)
     {
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_HEADER, 0);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
 
-        $content = curl_exec($ch);
-        curl_close($ch);
+            $content = curl_exec($ch);
+            curl_close($ch);
 
-        return $content;
+            return $content;
+        }
+        $context = stream_context_create(array(
+            parse_url($url, PHP_URL_SCHEME) => array(
+                'method'  => 'POST',
+                'header'  => 'Content-type: application/x-www-form-urlencoded',
+                'content' => $post_data
+            ),
+        ));
+        return file_get_contents($url, false, $context);
     }
 }

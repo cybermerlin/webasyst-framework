@@ -1,0 +1,113 @@
+<style>
+    {include file="../css/comments.css" inline}
+</style>
+
+<div class="block b-comments-widget">
+
+    {if !count($comments)}
+
+        <h5 class="align-center hint b-no-comments">[`There are no comments in your blog yet.`]</h5>
+
+    {else}
+
+        <h6 class="heading">[`Latest comments`]</h6>
+
+        {foreach $comments as $comment}
+            <div class="b-comment {if $comment.status == blogCommentModel::STATUS_DELETED}b-deleted{/if}" data-comment-id="{$comment.id}">
+
+                <header class="b-header b-comment-auth-{$comment.auth_provider|default:blogCommentModel::AUTH_USER}">
+                    {$_author_uri = "javascript:void(0);"}
+                    {if !empty($comment.site)}
+                        {$_author_uri = $comment.site|escape}
+                    {/if}
+
+                    {* UserPic *}
+                    {if !empty($comment.user.photo_url_50)}
+                        <div class="left-column">
+                            <a class="b-author-image" href="{$_author_uri}"><img class="userpic" src="{$comment.user.photo_url_50}" alt=""></a>
+                        </div>
+                    {/if}
+
+                    <div class="main-column">
+                        {* Name *}
+                        <span class="b-author-name bold">
+                            {if !empty($comment.user.name)}
+                                <a href="{$_author_uri}">{$comment.user.name|escape}</a>
+                            {else}
+                                {if empty($comment.contact_id) && !empty($comment.email)}
+                                    <span class="hint">{$comment.email|escape}</span>
+                                {/if}
+                            {/if}
+                        </span>
+
+                        {* Date *}
+                        <span class="b-comment-date hint">{$comment.datetime|wa_datetime:"humandatetime"}, {$comment.ip}</span>
+                    </div>
+                </header>
+
+                {if $comment.status == blogCommentModel::STATUS_DELETED}
+                    <p class="b-comment-text">[`Comment deleted`]</p>
+
+                {elseif isset($comment.post) && (!$comment.post || $comment.post.status neq blogPostModel::STATUS_PUBLISHED)}
+                    <p class="b-comment-text hint italic">[`Comment to an unpublished post (not visible anymore)`]</p>
+
+                {else}
+                    {* COMMENT TEXT *}
+                    <p class="b-comment-text">
+                        {$comment.text|escape|nl2br}
+                    </p>
+
+                    {* post link *}
+                    {if isset($comment.post) && $comment.post}
+                        <p class="b-comment-subtext hint">
+                            [`on`]
+                            {if $comment.post.blog_status == blogBlogModel::STATUS_PRIVATE}
+                                <i class="icon10 lock-bw no-overhanging"></i>
+                            {/if}
+                            {if $comment.post.status eq blogPostModel::STATUS_PUBLISHED}
+                                <a href="{strip}
+                                    {if $comment.post.status eq blogPostModel::STATUS_PUBLISHED && $comment.post.blog_status eq blogBlogModel::STATUS_PUBLIC && $comment.post.link}
+                                        {$comment.post.link[0]}
+                                    {else}
+                                        {$wa_backend_url}blog/?module=post&amp;id={$comment.post_id}
+                                    {/if}
+                                    {if $comment.post.status eq blogPostModel::STATUS_PUBLISHED}
+                                      #comments
+                                    {else}
+                                      &amp;action=edit
+                                    {/if}
+                                    {/strip}">
+                                    <span{if $comment.post.color && $comment.post.color != 'b-white'} class="b-{$comment.post.color|substr:2}"{/if}>
+                                      {$comment.post.title|escape}
+                                    </span>
+                                </a>
+                            {else}
+                                [`unpublished post`]
+                            {/if}
+                        </p>
+                    {/if}
+
+                    {* in reply to *}
+                    {if $comment.parent && isset($comment.parent_text)}
+                        <p class="b-comment-subtext hint">[`in reply to`]
+                            <strong>
+                                {if $comment.parent_status == blogCommentModel::STATUS_DELETED}
+                                    <strike>[`Comment deleted`]</strike>
+                                {else}
+                                    {$comment.parent_text|escape}
+                                {/if}
+                            </strong
+                        </p>
+                    {/if}
+                {/if}
+            </div>
+        {/foreach}
+
+        <div class="b-link-to-all-posts">
+            <div class="block">
+                <a href="{$wa_backend_url}blog/?module=comments">[`View all comments`]</a>
+            </div>
+        </div>
+
+    {/if}
+</div>

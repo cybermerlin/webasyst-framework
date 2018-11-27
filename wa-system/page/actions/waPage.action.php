@@ -56,15 +56,26 @@ class waPageAction extends waViewAction
                 'keywords' => isset($page['keywords']) ? $page['keywords'] : '',
                 'description' => isset($page['description']) ? $page['description'] : ''
             ));
-            $this->view->assign('page', $page);
 
-            try {
-                $this->view->assign('wa_theme_url', $this->getThemeUrl());
-                $page['content'] = $this->view->fetch('string:'.$page['content']);
-            } catch (SmartyCompilerException $e) {
-                $message = preg_replace('/"[a-z0-9]{32,}"/'," of content Site page with id {$page['id']}",$e->getMessage());
-                throw new SmartyCompilerException($message, $e->getCode());
+            // Open Graph
+            $og = false;
+            foreach (array('title', 'image', 'video', 'description', 'type') as $k) {
+                if (!empty($page['og_'.$k])) {
+                    $og = true;
+                    $this->getResponse()->setOGMeta('og:'.$k, $page['og_'.$k]);
+                }
             }
+            if (!$og) {
+                $this->getResponse()->setOGMeta('og:title', $page['title']);
+                if (!empty($page['description'])) {
+                    $this->getResponse()->setOGMeta('og:description', $page['description']);
+                }
+            }
+
+            $this->view->assign('page', $page);
+            $this->view->assign('wa_theme_url', $this->getThemeUrl());
+            $page['content'] = $this->renderPage($page);
+
             if ($this->layout) {
                 $this->layout->assign('page_id', $page['id']);
             }
@@ -73,7 +84,22 @@ class waPageAction extends waViewAction
         }
     }
 
-    public function display($clear_assign = true)
+    public function renderPage($page)
+    {
+        try {
+            $result = $this->view->fetch('string:'.$page['content']);
+            if ($result && false !== strpos($result, 'text-')) {
+                // @deprecated
+                $result = '<style>.text-center{text-align:center;}.text-right{text-align:right}.text-justify{text-align:justify;}</style>'.$result;
+            }
+            return $result;
+        } catch (SmartyCompilerException $e) {
+            $message = preg_replace('/"[a-z0-9]{32,}"/'," of content Site page with id {$page['id']}", $e->getMessage());
+            throw new SmartyCompilerException($message, $e->getCode());
+        }
+    }
+
+    public function display($clear_assign = false)
     {
         if (waSystemConfig::isDebug()) {
             return parent::display($clear_assign);
@@ -86,7 +112,6 @@ class waPageAction extends waViewAction
             throw new SmartyCompilerException($message, $e->getCode());
         }
     }
-
 
     /**
      * @return waPageModel

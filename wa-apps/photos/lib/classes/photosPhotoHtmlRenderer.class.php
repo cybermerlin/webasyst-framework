@@ -49,7 +49,7 @@ class photosPhotoHtmlRenderer
 
             // hidden image with class thumb need for rich gradual loading photo effect when go next/prev photo
             if (is_null($photo)) {
-                $li .= '<a href="javascript:void(0);"><img src="'.$theme_url.'/img/photostream-end.png"></a>';
+                $li .= '<a href="javascript:void(0);"><img src="'.$theme_url.'img/photostream-end.png"></a>';
             } else {
                 $salt = !is_null($photo['edit_datetime']) ? '?'.strtotime($photo['edit_datetime']) : '';
                 $li .= '<a href="'.(isset($photo['full_url']) ? $photo['full_url'] : $photo['url']).'"><img src="'.$photo['thumb_crop']['url'].$salt.'" alt=""><img class="thumb" src="'.$photo['thumb']['url'].$salt.'" style="display:none;" alt=""></a>';
@@ -111,7 +111,7 @@ class photosPhotoHtmlRenderer
         $html  = "<div class='stack-nav' data-photo-id='{$current_photo['id']}'>";
         $html .= '  <a href="'.($prev_in_stack ? (isset($prev_in_stack['full_url']) ? $prev_in_stack['full_url'] : $prev_in_stack['url']) : 'javascript:void(0);').'" class="rewind"><img src="'.$theme_url.'img/stack-rewind.png" alt=""></a>';
         $html .= "  <strong class='offset'>$offset</strong> / $count";
-        $html .= '  <a href="'.($next_in_stack ? (isset($next_in_stack['full_url']) ? $next_in_stack['full_url'] : $next_in_stack['url']) : 'javascript:void(0);').'" class="ff"><img src="'.$theme_url.'img/stack-ff.png" "alt=""></a>';
+        $html .= '  <a href="'.($next_in_stack ? (isset($next_in_stack['full_url']) ? $next_in_stack['full_url'] : $next_in_stack['url']) : 'javascript:void(0);').'" class="ff"><img src="'.$theme_url.'img/stack-ff.png" alt=""></a>';
 
         // hidden stack-stream with class thumb need for rich gradual loading photo effect when go next/prev photo in stack
         $html .= '  <ul class="photostream" style="display:none;">';

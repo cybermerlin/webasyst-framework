@@ -78,9 +78,11 @@ class sitePersonalAction extends waViewAction
             'other' => $apps_other
         ));
 
-        $this->view->assign('domain_id', siteHelper::getDomainId());
-        $this->view->assign('auth_enabled', !empty($auth_config['auth']));
-        $this->view->assign('auth_app', ifset($auth_config['app']));
+        $this->view->assign(array(
+            'domain_id'    => siteHelper::getDomainId(),
+            'auth_enabled' => !empty($auth_config['auth']),
+            'auth_app'     => ifset($auth_config['app']),
+        ));
 
         $this->template = wa()->getAppPath($this->getTemplate(), 'site');
     }
@@ -112,6 +114,7 @@ class sitePersonalAction extends waViewAction
                         if (!$link && preg_match('/href="(.*?)"/uis', $m, $link_m)) {
                             $link = $link_m[1];
                         }
+                        $m = preg_replace('#<(script|style).*?>.*?</\\1>#uis', '', $m);
                         $result[] = trim(strip_tags($m));
                     }
                 }

@@ -6,14 +6,14 @@
  * @subpackage Security
  * @author Uwe Tews
  */
- 
+
 /*
  * FIXME: Smarty_Security API
  *      - getter and setter instead of public properties would allow cultivating an internal cache properly
  *      - current implementation of isTrustedResourceDir() assumes that Smarty::$template_dir and Smarty::$config_dir are immutable
  *        the cache is killed every time either of the variables change. That means that two distinct Smarty objects with differing
- *        $template_dir or $config_dir should NOT share the same Smarty_Security instance, 
- *        as this would lead to (severe) performance penalty! how should this be handled? 
+ *        $template_dir or $config_dir should NOT share the same Smarty_Security instance,
+ *        as this would lead to (severe) performance penalty! how should this be handled?
  */
 
 /**
@@ -55,44 +55,74 @@ class Smarty_Security {
      */
     protected $trusted_uri = array();
     /**
-     * This is an array of trusted static classes.
+     * This is an array of NOT trusted static classes.
      *
      * If empty access to all static classes is allowed.
      * If set to 'none' none is allowed.
      * @var array
      */
     protected $static_classes = array(
+        'waAppConfig',
         'waFiles',
         'waSystem',
         'waContactFields',
         'waConfig',
-        'waUtils',
+        'waUtils::varExportToFile',
         'waHtmlControl',
         'waLog',
-        'waRequest::file'
+        'waRequest::file',
+        'waDbConnector',
+        'waEvent',
     );
     /**
      * This is an array of disabled PHP functions.
-     *
-     * If empty all functions are allowed.
-     * To disable all PHP functions set $php_functions = null.
-     * @var array
      */
     protected $php_functions = array(
-        'eval', 'exec', 'system', 'popen', 'proc_open', 'shell_exec', 'passthru',
-        'file_put_contents', 'file_get_contents', 'fopen', 'file', 'fwrite', 'fputs', 'copy', 'rename', 'move_uploaded_file',
-        'link', 'symlink', 'unlink',
-        'call_user_func', 'call_user_func_array', 'create_function', 'call_user_method', 'call_user_method_array',
-        'preg_replace_callback', 'wa', 'wa_lambda', 'preg_replace', 'unserialize', 'serialize',
-        'get_defined_vars', 'get_defined_constants',
+        'dl', 'eval', 'exec', 'system', 'popen', 'pclose', 'shell_exec', 'passthru', 'assert', 'assert_options',
+        'fopen', 'fwrite', 'fput', 'fputs', 'copy', 'chmod', 'chgrp', 'chown', 'rename',
+        'touch', 'tempnam', 'fscanf', 'glob', 'fprintf',
+        'lchown', 'lchgrp', 'link', 'symlink', 'unlink', 'realpath', 'scandir', 'opendir', 'rmdir', 'mkdir', 'is_writable',
+        'call_user_func', 'call_user_func_array', 'create_function', 'call_user_method', 'call_user_method_array', 'lstat', 'stat',
+        'register_shutdown_function', 'register_tick_function', 'set_error_handler', 'set_exception_handler', 'session_set_save_handler',
+        'preg_replace_callback', 'wa', 'wa_lambda', 'preg_replace', 'unserialize', 'serialize', 'debug_backtrace', 'get_resources', 'phpinfo',
+        'get_defined_vars', 'get_defined_constants', 'getenv', 'putenv', 'get_current_user', 'get_cfg_var',  'pathinfo',
+        'disk_free_space', 'disk_total_space', 'diskfreespace', 'getcwd', 'getlastmo', 'gid',
         'array_map', 'array_walk', 'array_reduce', 'array_filter', 'usort', 'uksort', 'uasort', 'array_diff_uassoc', 'array_diff_ukey',
         'array_udiff_assoc', 'array_udiff_uassoc', 'array_udiff', 'array_uintersect_assoc', 'array_uintersect_uassoc',
-        'array_intersect_uassoc', 'array_intersect_ukey',
-        'array_uintersect', 'array_walk', 'array_walk_recursive',
-        'func_get_args', 'func_get_arg', 'class_alias', 'iterator_apply',
-        'mysql_fetch_object', 'mysqli_fetch_object',
-        'dom_import_simplexml', 'simplexml_load_string', 'simplexml_load_file',
-        'spl_autoload_register', 'spl_autoload_call', 'sscanf', 'curl_init'
+        'array_intersect_uassoc', 'array_intersect_ukey', 'extract', 'parse_str',
+        'array_uintersect', 'array_walk', 'array_walk_recursive', 'pfsockopen', 'fsockopen',
+        'func_get_args', 'func_get_arg', 'class_alias', 'iterator_apply', 'iptcembed',
+        'forward_static_call', 'forward_static_call_array', 'get_defined_functions',
+        'dom_import_simplexml', 'simplexml_load_string', 'show_source', 'php_strip_whitespace', 'get_meta_tags',
+        'spl_autoload_register', 'spl_autoload_call', 'sscanf', 'curl_init',
+        'debug_backtrace', 'mail', 'mb_send_mail', 'set', 'php_uname',
+        //'move_uploaded_file', 'tmpfile', 'highlight_file', 'parse_ini_file', 'simplexml_load_file', 'ini_alter', 'ini_get',
+    );
+    /**
+     * Array of disabled PHP function masks.
+     */
+    protected $php_function_masks = array(
+        '~callback~i',
+        '~exif_~i',
+        '~(?<!is_)file(?!(mtime|_exists))~i',
+        '~^mysql~i',
+        '~^gz~i',
+        '~^bz~i',
+        '~^posix~i',
+        '~^pcntl~i',
+        '~^ob_~i',
+        '~^sqlite~i',
+        '~^getmy~i',
+        '~^proc_~i',
+        '~^apache_~i',
+        '~^image~i',
+        '~^ftp_~i',
+        '~^read~i',
+        '~^curl_~i',
+        '~^stream~i',
+        '~^ini_~i',
+        '~^xmlrpc_~i',
+        '~^mb_ereg~i',
     );
     /**
      * This is an array of trusted PHP modifiers.
@@ -181,16 +211,17 @@ class Smarty_Security {
      * @var array
      */
     protected $_trusted_dir = null;
-    
-    
+
+
     /**
      * @param Smarty $smarty
      */
     public function __construct($smarty)
     {
         $this->smarty = $smarty;
+        $this->static_classes = array_map('strtolower', $this->static_classes);
     }
-    
+
     /**
      * Check if PHP function is trusted.
      *
@@ -201,13 +232,25 @@ class Smarty_Security {
      */
     public function isTrustedPhpFunction($function_name, $compiler)
     {
-        if (!empty($this->php_functions) && in_array($function_name, $this->php_functions)) {
+        $function_name = strtolower($function_name);
+        $unsafe = in_array($function_name, $this->php_functions);
+        if (!$unsafe) {
+            foreach($this->php_function_masks as $mask) {
+                if (preg_match($mask, $function_name)) {
+                    $unsafe = true;
+                    break;
+                }
+            }
+        }
+
+        if ($unsafe) {
             $compiler->trigger_template_error("PHP function '{$function_name}' not allowed by security setting");
             return false;
         }
 
         return true;
     }
+
     /**
      * Check if static class is trusted.
      *
@@ -218,14 +261,40 @@ class Smarty_Security {
      */
     public function isTrustedStaticClass($class_name, $compiler, $method = false)
     {
-        $method= substr(strtolower($method), 0, strpos($method, '('));
-        if (in_array($class_name, $this->static_classes) || in_array($class_name.'::'.$method, $this->static_classes)
-            || substr($class_name, 0, 7) == 'Smarty_') {
-            $compiler->trigger_template_error("access to static class '{$class_name}' not allowed by security setting");
-            return false;
+        $allowed = true;
+        $orig_method = $method;
+        $orig_class_name = $class_name;
+        $class_name = strtolower($class_name);
+        $method = substr(strtolower($method), 0, strpos($method, '('));
+
+        // Prohibited static classes
+        if (in_array($class_name, $this->static_classes) || in_array($class_name.'::'.$method, $this->static_classes)) {
+            $allowed = false;
+        }
+        // Smarty internals
+        if ($allowed && substr($class_name, 0, 7) == 'smarty_') {
+            $allowed = false;
         }
 
-        return true;
+        // Prohibited methods
+        if ($allowed && ($method == 'getactive' || $method == 'getappconfig' || $method == 'setdebug' || $method == 'systemoption' || $method == '__set_state')) {
+            $allowed = false;
+        }
+        if ($allowed && $method == 'getinstance' && $class_name != 'shopdimension') {
+            $allowed = false;
+        }
+        // Prohibited method masks
+        if ($allowed && (false !== strpos($method, 'model') || false !== strpos($method, 'factory'))) {
+            $allowed = false;
+        }
+        if ($allowed && false !== strpos($method, 'getplugin') && $method != 'getplugininfo') {
+            $allowed = false;
+        }
+
+        if (!$allowed) {
+            $compiler->trigger_template_error("access to static method '{$orig_class_name}::{$orig_method}' not allowed by security setting");
+        }
+        return $allowed;
     }
 
 
@@ -239,7 +308,7 @@ class Smarty_Security {
      */
     public function isTrustedPhpModifier($modifier_name, $compiler)
     {
-        if (in_array($modifier_name, $this->php_functions)) {
+        if (!$this->isTrustedPhpFunction($modifier_name, $compiler)) {
             $compiler->trigger_template_error("modifier '{$modifier_name}' not allowed by security setting");
             return false; // should not, but who knows what happens to the compiler in the future?
         }
@@ -363,7 +432,7 @@ class Smarty_Security {
      * To simplify things, isTrustedUri() resolves all input to "{$PROTOCOL}://{$HOSTNAME}".
      * So "http://username:password@hello.world.example.org:8080/some-path?some=query-string"
      * is reduced to "http://hello.world.example.org" prior to applying the patters from {@link $trusted_uri}.
-     * @param string $uri 
+     * @param string $uri
      * @return boolean true if URI is trusted
      * @throws SmartyException if URI is not trusted
      * @uses $trusted_uri for list of patterns to match against $uri
@@ -379,10 +448,10 @@ class Smarty_Security {
                 }
             }
         }
-        
+
         throw new SmartyException("URI '{$uri}' not allowed by security setting");
     }
-    
+
     /**
      * Check if directory of file resource is trusted.
      *

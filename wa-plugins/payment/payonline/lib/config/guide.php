@@ -1,9 +1,9 @@
 <?php
 return array(
     array(
-        'value'       => 'Standart',
+        'value'       => 'Standard',
         'title'       => 'Режим безопасности',
-        'description' => 'Используйте это значение в настройках интеграции в личном кабинете PayOnline System',
+        'description' => 'Используйте это значение в настройках интеграции в личном кабинете PayOnline',
     ),
     array(
         'value'       => '%HTTP_RELAY_URL%',

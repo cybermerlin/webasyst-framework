@@ -80,6 +80,14 @@ abstract class waRightConfig
     }
 
     /**
+     * List of controls added via $this->addItem().
+     */
+    public function getItems()
+    {
+        return $this->items;
+    }
+
+    /**
      * Return custom access rights managed by app for contact id (not considering group he's in) or a set of group ids.
      * Application must override this if it uses custom access rights storage.
      *
@@ -116,11 +124,24 @@ abstract class waRightConfig
 
     /**
      * Set default access for given contact and return access rights to set up in system access storage.
+     * Called after contact has been granted Limited access to the app.
      *
      * @param int $contact_id
      * @return array access key => value
      */
     public function setDefaultRights($contact_id)
+    {
+        return $this->getDefaultRights($contact_id);
+    }
+
+    /**
+     * Return access rights to set in access control dialog by default
+     * for a contact without any rights yet.
+     *
+     * @param int $contact_id
+     * @return array access key => value
+     */
+    public function getDefaultRights($contact_id)
     {
         return array();
     }
@@ -151,6 +172,10 @@ abstract class waRightConfig
                 $addScriptForCB = TRUE;
             }
 
+            if ($item['type'] == 'selectlist' && isset($item['params']['hint1']) && $item['params']['hint1'] == 'all_select') {
+                $addScriptForCB = TRUE;
+            }
+
             if ($inherited !== null && ($item['type'] == 'select' || $item['type'] == 'selectlist')) {
                 $addScriptForSelect = TRUE;
             }
@@ -178,17 +203,20 @@ abstract class waRightConfig
         if ($addScriptForSelect) {
             $html .= '
                 // Change resulting column for selects
-                $("table.c-access-app select").change(function() {
+                var updateIndicator = function() {
                     var self = $(this);
-                    var tr = self.parents("table.c-access-app tr");
-                    var result = Math.max(self.val()-0, tr.find("input.g-value").val()-0);
+                    var tr = self.closest("table.c-access-app tr");
+                    var group_value = tr.find("input.g-value").val()-0;
+                    var personal_value = self.val()-0;
+                    var result = group_value ? Math.max(personal_value, group_value) : personal_value;
                     var name = self.find("option[value=\""+result+"\"]").text();
                     tr.find("strong").text(name);
-                });';
+                };
+                $("table.c-access-app select").change(updateIndicator);';
         }
 
         if ($addScriptForCB) {
-            $html .= '
+            $html .= <<<HTML
                 // Logic for "all" checkboxes
                 /** if $(this) is checked, then check and disable all checkboxes starting with the same name (minus `.all`)
                   * if not checked, then enable all those checkboxes. */
@@ -207,16 +235,36 @@ abstract class waRightConfig
                             }
                         });
                     cb.attr("disabled", false);
+                    if (cb.val() !== "") {
+                    cb.parents("table.c-access-app")
+                        .find("select[name^=\""+cb.attr("name").replace(/\.all]/,"")+"\"]").each(function (k,cb2) {
+                            cb2 = $(cb2);
+                            cb2.val(cb.val());
+                            updateIndicator.call(cb2[0]);
+                        });
+                    }
                 };
                 /* For each enabled "all" checkbox in a table.c-access-app:
                    - Add an onclick handler
                    - Call the handler initially, if `all` is checked. */
+                $("table.c-access-app .c-access-cb-all select").each(function(k,cb) {
+                    cb = $(cb).change(handler);
+                    //handler.call(cb[0]);
+                });
+                $("table.c-access-app .c-access-subcontrol-item select").change(function () {
+                    var el = $(this);
+                    var all = el.closest("table.c-access-app").find(".c-access-cb-all select");
+                    if (all.val() !== $(this).val()) {
+                        all.val('');
+                    }
+                });
                 $("table.c-access-app .c-access-cb-all input:enabled").each(function(k,cb) {
                     cb = $(cb).click(handler);
                     if (cb.is(":checked")) {
                         handler.call(cb[0]);
                     }
-                });';
+                });
+HTML;
         }
 
         $html .= '
@@ -250,22 +298,19 @@ abstract class waRightConfig
                 if (!isset($params['options']) || !$params['options']) {
                     return '';
                 }
-                if (!$group) {
-                    $group = 0;
-                }
-                if (!$own) {
-                    $own = 0;
-                }
+                $own = ifempty($own, 0);
+                $group = ifempty($group, 0);
+                $max = $group ? max($own, $group) : $own;
 
                 $o = $params['options'];
                 $oHTML = array();
                 foreach($o as $val => $opt) {
-                    $oHTML[] = '<option value="'.$val.'"'.($own==$val ? ' selected="selected"' : '').'>'.htmlspecialchars($opt).'</option>';
+                    $oHTML[] = '<option value="'.$val.'"'.($own==$val ? ' selected' : '').'>'.htmlspecialchars($opt).'</option>';
                 }
                 $oHTML = implode('', $oHTML);
                 return '<tr'.($params['cssclass'] ? ' class="'.$params['cssclass'].'"' : '').'>'.
                             '<td><div>'.$label.'</div></td>'.
-                            ($inherited !== null ? '<td><strong>'.$o[max($own, $group)].'</strong></td>' : '').
+                            ($inherited !== null ? '<td><strong>'.$o[$max].'</strong></td>' : '').
                             '<td><input type="hidden" name="app['.$name.']" value="0">'.
                                 '<select name="app['.$name.']">'.$oHTML.'</select>'.
                             '</td>'.
@@ -278,6 +323,16 @@ abstract class waRightConfig
                             '<td><input type="hidden" name="app['.$name.']" value="0"><input type="checkbox" name="app['.$name.']" value="'.(isset($params['value']) ? $params['value'] : 1).'"'.($own ? ' checked="checked"' : '').'></td>'.
                             ($inherited !== null ? '<td><input type="checkbox"'.($group ? ' checked="checked"' : '').' disabled="disabled"></td>' : '').
                         '</tr>';
+            case 'always_enabled':
+                if ($inherited !== null) {
+                    $html = '<td><div>'.$label.'</div></td>'.
+                            '<td><i class="icon10 yes"></i></td>'.
+                            '<td></td><td></td>';
+                } else {
+                    $html = '<td><div>'.$label.'</div></td>'.
+                            '<td><i class="icon10 yes"></i></td>';
+                }
+                return '<tr'.($params['cssclass'] ? ' class="'.$params['cssclass'].'"' : '').'>'.$html.'</tr>';
             case 'list':
                 $indicator = '';
                 if (isset($params['hint1']) && $params['hint1'] == 'all_checkbox') {
@@ -290,7 +345,6 @@ abstract class waRightConfig
                         //$indicator = '<span class="float-right"><i class="icon10 '.($own || $group ? 'yes' : 'no').'"></i></span>';
                     }
                 }
-
                 $html = '<tr class="c-access-subcontrol-header'.($params['cssclass'] ? ' '.$params['cssclass'] : '').'">'.
                                 '<td><div>'.$indicator.$label.'</div></td>'.
                                 ($inherited !== null ? '<td></td>' : '').
@@ -312,6 +366,33 @@ abstract class waRightConfig
                 if (!isset($params['options']) || !$params['options']) {
                     return '';
                 }
+                if (isset($params['hint1']) && $params['hint1'] == 'all_select') {
+                    $own = isset($rights[$name.'.all']) ? $rights[$name.'.all'] : '';
+                    if ($own === '') {
+                        reset($params['items']);
+                        $k = key($params['items']);
+                        $own = isset($rights[$name.'.'.$k]) ? $rights[$name.'.'.$k] : '';
+                        foreach ($params['items'] as $id => $item_name) {
+                            $item_v = isset($rights[$name.'.'.$id]) ? $rights[$name.'.'.$id] : key($params['options']);
+                            if ($item_v != $own) {
+                                $own = '';
+                                break;
+                            } else {
+                                $own = $item_v;
+                            }
+                        }
+                        $own = (string)$own;
+                    }
+                    $group = $inherited && isset($inherited[$name.'.all']) ? $inherited[$name.'.all'] : null;
+                    $params['hint1'] = '<span class="c-access-cb-all nm"><label><select name="app['.$name.'.all]"><option value=""></option>';
+                    foreach ($params['options'] as $v => $n) {
+                        $params['hint1'].= '<option '.($own === (string)$v ? 'selected':'').' value="'.$v.'">'.$n.'</option>';
+                    }
+                    $params['hint1'].= '</select></label></span>';
+                    if($inherited !== null) {
+                        $params['hint2'] = '<span class="c-access-cb-all">' . ($group && isset($params['options'][$group]) ? $params['options'][$group] : '') . '</span>';
+                    }
+                }
                 $html = '<tr class="c-access-subcontrol-header'.($params['cssclass'] ? ' '.$params['cssclass'] : '').'">'.
                                 '<td><div>'.$label.'</div></td>'.
                                 ($inherited !== null ? '<td></td>' : '').
@@ -319,6 +400,9 @@ abstract class waRightConfig
                                 ($inherited !== null ? '<td><div class="hint">'.(isset($params['hint2']) ? $params['hint2'] : '').'</td>' : '').
                         '</tr>';
                 foreach ($params['items'] as $id => $item_name) {
+                    if (isset($params['hint1']) && !isset($rights[$name.'.'.$id]) && !empty($rights[$name.'.all'])) {
+                        $rights[$name.'.'.$id] = $rights[$name.'.all'];
+                    }
                     $html .= $this->getItemHtml($name.'.'.$id, htmlspecialchars($item_name), 'select', array('cssclass' => 'c-access-subcontrol-item', 'options' => $params['options']), $rights, $inherited);
                 }
                 return $html;

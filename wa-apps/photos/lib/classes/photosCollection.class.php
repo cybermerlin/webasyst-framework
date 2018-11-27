@@ -10,6 +10,7 @@ class photosCollection
     protected $where;
     protected $order_by = 'p.upload_datetime DESC,p.id';
     protected $joins;
+    protected $join_index = array();
 
     protected $options = array(
     //'check_rights' => false
@@ -207,8 +208,8 @@ class photosCollection
              * @param array[string]boolean $params['add']
              * @param array[string]array $params['options']
              */
-            wa()->event('extra_prepare_collection', $params);
-            
+            wa('photos')->event('extra_prepare_collection', $params);
+
             if ($this->prepared) {
                 return;
             }
@@ -397,11 +398,27 @@ class photosCollection
             $this->addTitle( sprintf( _w('Tagged “%s”'), $tag['name'] ) );
         }
     }
-    
+
+    protected function appPrepare($app_id, $auto_title = true)
+    {
+        $this->setCheckRights(false);
+        $model = $this->getModel();
+        $this->where[] = "p.app_id = '".$model->escape($app_id)."'";
+
+        if ($auto_title) {
+            $name = $app_id;
+            $apps = wa()->getApps();
+            if (!empty($apps[$app_id])) {
+                $name = $apps[$app_id]['name'];
+            }
+            $this->addTitle($name);
+        }
+    }
+
     protected function tagPrepareIntersection($tag_names)
     {
         $tag_model = new photosTagModel();
-        
+
         $in = array();
         $title = array();
         foreach (explode(',', $tag_names) as $tag_name) {
@@ -414,7 +431,7 @@ class photosCollection
         if (!$in) {
             $this->where[] = "0";
         } else {
-            $sql = "SELECT photo_id, COUNT(tag_id) cnt FROM `photos_photo_tags` 
+            $sql = "SELECT photo_id, COUNT(tag_id) cnt FROM `photos_photo_tags`
                 WHERE tag_id IN (".  implode(',', $in).")
                 GROUP BY photo_id
                 HAVING cnt = ".count($in);
@@ -555,7 +572,7 @@ class photosCollection
     {
         if ($check_album) {
             $url = self::frontendAlbumHashToUrl($hash);
-            if ($url) {
+            if (strlen($url)) {
                 $link = photosFrontendAlbum::getLink($url);
                 return $link;
             }
@@ -573,7 +590,7 @@ class photosCollection
         } else if (count($hash) == 1) {
             $params[$hash[0]] = $hash[0];
         }
-        $link = wa()->getRouteUrl('photos/frontend', $params, true);
+        $link = wa()->getRouteUrl('photos/frontend', $params, true, wa()->getRouting()->getDomain(null, true, false));
         return $link ? rtrim($link, '/').'/' : null;
     }
 
@@ -680,12 +697,12 @@ class photosCollection
         //$sql .= $this->getGroupBy();
         $sql .= $this->getOrderBy();
         $sql .= " LIMIT ".($offset ? $offset.',' : '').(int)$limit;
-
+        //header('X-PHOTOS-COLLECTION-SQL: ' . str_replace("\n", "", $sql));
         $data = $this->getModel()->query($sql)->fetchAll('id');
         if (!$data) {
             return array();
-        }        
-        
+        }
+
         if ($this->post_fields) {
             $ids = array_keys($data);
             foreach ($this->post_fields as $table => $fields) {
@@ -712,7 +729,7 @@ class photosCollection
                                 }
                             }
                             foreach ($data as $id => &$v) {
-                                $v[$f] = photosPhoto::getThumbInfo($v, $size);
+                                $v[$f] = photosPhoto::getThumbInfo($v, $size, false);
                             }
                             unset($v);
                         }
@@ -720,7 +737,7 @@ class photosCollection
                             foreach ($data as $id => &$v) {
                                 $v['frontend_link'] = photosFrontendPhoto::getLink(array(
                                     'url' => $this->frontend_base_url ? $this->frontend_base_url.'/'.$v['url'] : $v['url']
-                                ));
+                                ), null, false);
                             }
                             unset($v);
                         }
@@ -934,7 +951,7 @@ class photosCollection
         $this->where[] = $condition;
         return $this;
     }
-    
+
     public function addTitle($title, $delim = ', ')
     {
         if (!$title) {
@@ -945,14 +962,73 @@ class photosCollection
         }
         $this->title .= $title;
     }
-    
+
     public function setTitle($title)
     {
         $this->title = $title;
     }
-    
-    public function setCheckRights($check_rights) 
+
+    public function setCheckRights($check_rights)
     {
         $this->check_rights = $check_rights;
+    }
+
+    public function addJoin($table, $on = null, $where = null, $options = array())
+    {
+        $type = '';
+        if (is_array($table)) {
+            if (isset($table['on'])) {
+                $on = $table['on'];
+            }
+            if (isset($table['where'])) {
+                $where = $table['where'];
+            }
+            if (isset($table['type'])) {
+                $type = $table['type'];
+            }
+            $table = $table['table'];
+        }
+
+        $alias = $this->getTableAlias($table);
+
+        if (!isset($this->join_index[$alias])) {
+            $this->join_index[$alias] = 1;
+        } else {
+            $this->join_index[$alias]++;
+        }
+        $alias .= $this->join_index[$alias];
+
+        $join = array(
+            'table' => $table,
+            'alias' => $alias,
+            'type' => $type
+        );
+        if (!empty($options['force_index'])) {
+            $join['force_index'] = $options['force_index'];
+        }
+        if ($on) {
+            $join['on'] = str_replace(':table', $alias, $on);
+        }
+        $this->joins[] = $join;
+        if ($where) {
+            $this->addWhere(str_replace(':table', $alias, $where));
+        }
+        return $alias;
+    }
+
+    protected function getTableAlias($table)
+    {
+        $t = explode('_', $table);
+        $alias = '';
+        foreach ($t as $tp) {
+            if ($tp == 'hub') {
+                continue;
+            }
+            $alias .= substr($tp, 0, 1);
+        }
+        if (!$alias) {
+            $alias = $table;
+        }
+        return $alias;
     }
 }

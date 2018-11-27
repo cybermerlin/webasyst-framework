@@ -23,12 +23,12 @@ class blogCommentModel extends waNestedSetModel
         $items = $this->query($sql, array('post_id' => $id))->fetchAll();
         return $this->prepareView($items, $fields, $options);
     }
-    
+
     public function getSubtree($post_id, $parent_id = null)
     {
         $post_id = (int) $post_id;
         $parent_id = (int) $parent_id;
-        
+
         $q = new waDbQuery($this);
         if ($post_id) {
             $q->where("post_id = {$post_id}");
@@ -38,15 +38,15 @@ class blogCommentModel extends waNestedSetModel
             if (!$parent) {
                 $q->where('id = '.$parent_id);
             } else {
-                $where = "`{$this->left}`  >= {$parent[$this->left]} AND 
+                $where = "`{$this->left}`  >= {$parent[$this->left]} AND
                     `{$this->right}` <= {$parent[$this->right]}";
                 $q->where($where);
             }
         }
-        
+
         return $q->fetchAll('id');
     }
-    
+
     public function cutOffDeleted(&$items)
     {
         // need for cutting deleted reviews and its children in frontend
@@ -67,7 +67,7 @@ class blogCommentModel extends waNestedSetModel
                     $depth = $max_depth;
                 }
             }
-        }        
+        }
     }
 
     public function getList($search_options = array(), $fields = array(), $options = array())
@@ -76,24 +76,28 @@ class blogCommentModel extends waNestedSetModel
             'offset' => 0,
             'limit' => 20,
             'blog_id' => array(),
-            'post_id' => null
+            'post_id' => null,
+            'approved' => null,
         );
         $search_options += $default_search_options;
         if (!$search_options['blog_id']) {
             return array();
         }
-  
+
         $search_options['blog_id'] = (array) $search_options['blog_id'];
         $search_options['post_id'] = (array) $search_options['post_id'];
-        
+
         $where = array(
             'node.blog_id IN (:blog_id)'
         );
-        
+
         if ($search_options['post_id']) {
             $where[] = 'node.post_id IN (:post_id)';
         }
-        
+        if (!empty($search_options['approved'])) {
+            $where[] = "node.status='approved'";
+        }
+
         $sql = "SELECT node.id id,
                     node.text text,
                     node.post_id post_id,
@@ -113,19 +117,19 @@ class blogCommentModel extends waNestedSetModel
                     parent.name parent_name,
                     parent.email parent_email
                 FROM {$this->table} node
-		LEFT JOIN {$this->table} AS parent ON parent.id = node.parent
-		WHERE ".implode(' AND ', $where)."
-		ORDER BY node.datetime DESC
-		LIMIT i:o, i:l
+        LEFT JOIN {$this->table} AS parent ON parent.id = node.parent
+        WHERE ".implode(' AND ', $where)."
+        ORDER BY node.datetime DESC
+        LIMIT i:o, i:l
         ";
-                
+
         $items = $this->query($sql, array(
             'l' => $search_options['limit'],
             'o' => $search_options['offset'],
             'blog_id' => array_map('intval', $search_options['blog_id']),
             'post_id' => array_map('intval', $search_options['post_id'])
         ))->fetchAll('id');
-        
+
         return $this->prepareView($items, $fields, $options);
 
     }
@@ -176,7 +180,7 @@ class blogCommentModel extends waNestedSetModel
             unset($item);
         }
 
-        if (!empty($viewed_comments)) {
+        if (!empty($viewed_comments) && empty($extend_options['dont_mark_as_read'])) {
             foreach ($viewed_comments as $post_id => $ids) {
                 blogActivity::getInstance()->set("c.{$post_id}", $ids);
             }
@@ -436,4 +440,43 @@ class blogCommentModel extends waNestedSetModel
         }
         return $comments;
     }
+
+    /**
+     * Delete or restore comments. Processing the entire comment tree.
+     * @param int $comment_id
+     * @param string $status
+     * @return bool
+     * @throws waException
+     */
+    public function changeStatus($comment_id, $status)
+    {
+        $comment = $this->getById($comment_id);
+        if (!$comment) {
+            return false;
+        }
+        if ($status == $comment['status']) {
+            return true;
+        }
+        if ($status != self::STATUS_DELETED && $status != self::STATUS_PUBLISHED) {
+            return false;
+        }
+
+        if (isset($comment['blog_id'])) {
+            $this->query("UPDATE {$this->table} SET status='{$status}' WHERE `{$this->left}` >= i:left AND `{$this->right}` <= i:right AND `blog_id` = i:blog_id",
+                array(
+                    'left'     => $comment['left'],
+                    'right'    => $comment['right'],
+                    'blog_id' => $comment['blog_id'],
+                ));
+
+            // Write to wa_log
+            class_exists('waLogModel') || wa('webasyst');
+            $log_model = new waLogModel();
+            $log_model->add($status == self::STATUS_DELETED ? 'comment_delete' : 'comment_restore', $comment_id);
+
+        }
+
+        return true;
+    }
+
 }

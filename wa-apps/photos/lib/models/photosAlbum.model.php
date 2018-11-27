@@ -135,6 +135,34 @@ class photosAlbumModel extends waModel
         return $descendant;
     }
 
+    public function getChildren($parent_id)
+    {
+        $user = wa()->getUser();
+        if ($user->isAdmin('photos')) {
+            $rights_sql = '(r.group_id >= 0 OR r.group_id = -'.$user->getId().')';
+        } else {
+            $group_ids = $user->getGroups();
+            $group_ids[] = 0;
+            $group_ids[] = -$user->getId();
+            $rights_sql = 'r.group_id IN ('.implode(",", $group_ids).')';
+        }
+
+        $sql = "SELECT a.*, ac.count
+                FROM ".$this->table." a
+                JOIN photos_album_rights r
+                    ON a.id = r.album_id
+                        AND {$rights_sql}
+                LEFT JOIN photos_album_count ac
+                    ON a.id = ac.album_id
+                        AND ac.contact_id = i:contact_id
+                WHERE parent_id=i:parent_id
+                ORDER BY sort";
+        return $this->query($sql, array(
+            'parent_id' => $parent_id,
+            'contact_id' => $user->getId(),
+        ))->fetchAll($this->id);
+    }
+
     public function getAlbums($public_only = false, $type = null, $owned_only = false, $count = true)
     {
         $user = wa()->getUser();
@@ -337,7 +365,7 @@ class photosAlbumModel extends waModel
         } else {
             $full_url = $url;
         }
-        
+
         $this->updateById($id, array(
             'url' => $url,
             'full_url' => $full_url
@@ -427,11 +455,11 @@ class photosAlbumModel extends waModel
             $url = $data['url'];
             unset($data['url']);
         }
-        
+
         if (!isset($data['status'])) {
             $data['status'] = $item['status'];
         }
-        
+
         if ($data['status'] <= 0) {
             $data['full_url'] = null;
             if (!isset($data['hash'])) {
@@ -440,7 +468,7 @@ class photosAlbumModel extends waModel
         } else {
             unset($data['full_url']);
         }
-        
+
         $this->updateById($id, $data);
         if ($data['status'] <= 0) {
             $this->privateDescendants($id);
@@ -449,15 +477,15 @@ class photosAlbumModel extends waModel
         } else {
             $item = $this->getById($id);
             if (!$item['url']) {
-                $url = suggestUniqueUrl(photosPhoto::suggestUrl($item['name']));
+                $url = $this->suggestUniqueUrl(photosPhoto::suggestUrl($item['name']));
                 $this->updateUrl($id, $url);
-            } else if (!$item['full_url']) {
+            } elseif (!$item['full_url']) {
                 $this->updateUrl($id, $item['url']);
             }
         }
-        
+
         return true;
-        
+
     }
 
     /**
@@ -478,10 +506,12 @@ class photosAlbumModel extends waModel
                 'id' => $album_id
             ))->fetch();
             if ($album) {
+                $url = photosFrontendAlbum::getLink($album);
                 $breadcrumbs[] = array(
                     'album_id' => $album['id'],
                     'name' => $escape ? photosPhoto::escape($album['name']) : $album['name'],
-                    'full_url' => photosFrontendAlbum::getLink($album),
+                    'full_url' => $url,
+                    'url' => $url,
                     'status' => $album['status']
                 );
                 $album_id = $album['parent_id'];
@@ -494,32 +524,6 @@ class photosAlbumModel extends waModel
             array_pop($breadcrumbs);
         }
         return $breadcrumbs;
-    }
-
-    /**
-    * Get "childcrumbs" (sub-albums) for album (list of childrens)
-
-    * @param int $id
-    * @param bool $escape
-    * @return array of items array('name' => '..', 'full_url' => '..')
-    */
-    public function getChildcrumbs($id, $escape = false)
-    {
-
-        $sql = "SELECT id, full_url, name, note FROM {$this->table} WHERE parent_id = i:id AND status = 1";
-        $result = $this->query($sql, array(
-            'id' => $id
-        ));
-        $childcrumbs = array();
-        foreach ($result as $album) {
-            $childcrumbs[] = array(
-                'id' => $album['id'],
-                'name' => $escape ? photosPhoto::escape($album['name']) : $album['name'],
-                'full_url' => photosFrontendAlbum::getLink($album),
-                'note' => $escape ? photosPhoto::escape($album['note']) : $album['note']
-            );
-        }
-        return $childcrumbs;
     }
 
     /**
@@ -587,7 +591,7 @@ class photosAlbumModel extends waModel
                 }
             }
         }
-        
+
         return true;
     }
 
@@ -640,5 +644,34 @@ class photosAlbumModel extends waModel
             $counter++;
         }
         return $url;
+    }
+
+    public function keyPhotos(&$albums)
+    {
+        $key_photo_ids = array();
+        foreach($albums as $aid => $a) {
+            if ($a['key_photo_id']) {
+                $key_photo_ids[] = $a['key_photo_id'];
+            }
+        }
+
+        $collection = new photosCollection($key_photo_ids);
+        $photos = $collection->getPhotos('*,thumb_96x96,thumb_192x192', 0, count($key_photo_ids));
+        foreach($albums as &$a) {
+            if ($a['key_photo_id'] && !empty($photos[$a['key_photo_id']])) {
+                $a['key_photo'] = $photos[$a['key_photo_id']];
+                $a['key_photo']['thumb'] = $a['key_photo']['thumb_192x192'];
+            } else {
+                if ($a['key_photo_id']) {
+                    $this->updateById($a['id'], array(
+                        'key_photo_id' => null,
+                    ));
+                }
+                $a['key_photo'] = null;
+            }
+        }
+        unset($a);
+
+        return $albums;
     }
 }

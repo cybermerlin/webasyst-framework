@@ -339,6 +339,10 @@ SQL;
                         if (!isset($this->sql_params[$properties])) {
                             $this->sql_params[$properties] = $values;
                         } else {
+                            if (!is_array($this->sql_params[$properties])) {
+                                $this->sql_params[$properties] = array($this->sql_params[$properties]);
+                            }
+
                             $this->sql_params[$properties] = array_merge($this->sql_params[$properties], $values);
                         }
                     }
@@ -618,14 +622,14 @@ SQL;
         if (isset($data['status'])) {
             switch ($data['status']) {
                 case self::STATUS_PUBLISHED:
-                    if (!isset($data['datetime']) || !$data['datetime']) {
-                        if (!isset($current_data['datetime']) || !$current_data['datetime']) {
-                            $data['datetime'] = date("Y-m-d H:i:s");
-                        } elseif (isset($current_data['status']) && !in_array($current_data['status'], array(self::STATUS_PUBLISHED, self::STATUS_SCHEDULED))) {
-                            $data['datetime'] = date("Y-m-d H:i:s");
-                        } else {
+                    if (empty($current_data['status']) || in_array($current_data['status'], array(self::STATUS_DEADLINE, self::STATUS_DRAFT, self::STATUS_SCHEDULED))) {
+                        $data['datetime'] = date("Y-m-d H:i:s");
+                    } else if (ifset($current_data['status']) == self::STATUS_PUBLISHED) {
+                        if (empty($data['datetime'])) {
                             unset($data['datetime']);
                         }
+                    } else {
+                        unset($data['datetime']);
                     }
                     break;
                 case self::STATUS_DRAFT:
@@ -917,7 +921,11 @@ SQL;
     {
         $messages = array();
 
-        if ($data['blog_status'] != blogBlogModel::STATUS_PRIVATE) {
+        if (!empty($options['update_url_on_error'])) {
+
+            $data['url'] = $this->genUniqueUrl(ifempty($data['url'], $data['title']));
+
+        } else if ($data['blog_status'] != blogBlogModel::STATUS_PRIVATE) {
 
             if (!empty($data['id'])) {
                 $url_validator = new blogSlugValidator(array(
@@ -934,7 +942,7 @@ SQL;
                 $url_validator = new blogSlugValidator();
             }
 
-            $url_validator->setSubject(blogSlugValidator::SUBJECT_POST);
+            $url_validator->setSubject(_w('post','posts', 1));
 
             if (!$url_validator->isValid($data['url'])) {
 

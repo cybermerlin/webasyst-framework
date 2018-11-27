@@ -35,12 +35,12 @@
                     }
                 });
             };
-            
+
             // no cache dialog
             if (d.length) {
                 d.parent().remove();
             }
-            
+
             var p = $('<div></div>').appendTo('body');
             p.load('?module=dialog&action=albums', showDialog);
         },
@@ -94,7 +94,7 @@
                         $("#photo-tags-remove").hide();
                     }
                     $("#photo-list-tags-dialog .dialog-window").height($("#photo-list-tags-dialog .dialog-content-indent").outerHeight());
-                    
+
                     $('#photos-popular-tags').off('click.photos', 'a').
                             on('click.photos', 'a', function() {
                                 var name = $(this).text();
@@ -349,7 +349,7 @@
                 d.find('div:first').waDialog({
                     onLoad: function() {
                         var select = d.find('select[name=size]');
-                        select.val(size);
+                        size && select.val(size);
                         select.change(function() {
                             var size = $(this).val();
                             context_parameters.size = size;
@@ -422,12 +422,54 @@
                                         } else {
                                             d.find('.exclamation-message').show();
                                         }
+
+                                        // Domains for domain selector
+                                        context.domains = context.domains || {};
+                                        $domain_selector.children().each(function() {
+                                            var $option = $(this);
+                                            var domain = $option.attr('value');
+                                            $option.data('frontend-url', (context.domains[domain] || {}).frontend_url || '');
+                                        });
+
+                                        saveContextData();
+                                        updateDomainInFields();
                                     }
                                     d.find('h1').find('.loading').parent().hide();
                                 },
                             "json");
                         }
                         loadEmbedListContext.data = loadEmbedListContext.data || $.extend({}, context_parameters);
+
+                        var $domain_selector = d.find('select[name=domain]');
+                        if ($domain_selector.length) {
+                            saveContextData();
+                            updateDomainInFields();
+                            $domain_selector.change(updateDomainInFields);
+                        }
+                        function saveContextData() {
+                            $.each(['textarea[name=urls]', '#embed-photo-list-html', '#embed-photo-list-html-with-descriptions'], function(i, selector) {
+                                var $el = $(selector);
+                                $el.data('context_data', $el.val());
+                            });
+                        }
+                        function updateDomainInFields() {
+                            if (!$domain_selector.length) {
+                                return false;
+                            }
+
+                            $.each(['textarea[name=urls]', '#embed-photo-list-html', '#embed-photo-list-html-with-descriptions'], function(i, selector) {
+                                var $el = $(selector);
+                                $el.val($el.data('context_data').split($domain_selector.data('original-domain')).join($domain_selector.val()));
+                            });
+
+                            var $selectted_option = $domain_selector.children(':selected');
+                            if ($selectted_option.data('frontend-url')) {
+                                d.find('input[name=link]').val($selectted_option.data('frontend-url')).closest('.field').slideDown();
+                                d.find('a.link').attr('href', $selectted_option.data('frontend-url'));
+                           } else {
+                                d.find('input[name=link]').closest('.field').slideUp();
+                           }
+                        }
                     },
                     onSubmit: function() {
                         return false;
@@ -623,7 +665,7 @@
         },
         onInit: function(container) {
             container.find('[data-action="hide-name"] :checkbox').prop('checked', $.storage.get('photos/list/hide_name',false));
-            $('#photo-list.p-descriptions :text,#photo-list.p-descriptions textarea').live('change, keyup',function(){
+            var handler = function(){
                 var changed = [],matches;
                 $('#photo-list.p-descriptions :text,#photo-list.p-descriptions textarea').each(function(){
                     if ( (this.defaultValue != this.value) && (matches = $(this).attr('name').match(/^photo\[(\d+)\]\[(\w+)\]$/)) ){
@@ -654,7 +696,9 @@
                     $('#save-menu-block input.button').removeClass('green').addClass('yellow');
                     counter.show();
                 }
-            });
+            };
+            $('#p-content').on('change.photos-save-menu', '#photo-list.p-descriptions :text, #photo-list.p-descriptions textarea', handler);
+            $('#p-content').on('keyup.photos-save-menu', '#photo-list.p-descriptions :text, #photo-list.p-descriptions textarea', handler);
             //change data handler
         }
     });

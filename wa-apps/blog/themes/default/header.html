@@ -1,10 +1,31 @@
-{$pages = $wa->blog->pages()}
-{if count($pages)}
-    <ul class="pages">
-        <!-- pages -->            
-        {foreach $pages as $page}
+<!-- search -->
+<form method="get" action="{$wa_app_url}" class="search">
+    <div class="search-wrapper">
+        <input type="search" name="query" {if !empty($blog_query)}value="{$blog_query}"{/if} placeholder="[`Search posts`]">
+        <button type="submit"></button>
+    </div>
+    <div class="clear-both"></div>
+</form>
+
+<ul class="pages">
+
+    {foreach $wa->blog->blogs() as $blog}
+        <li class="{if $wa->globals('blog_id') eq $blog.id && empty($is_search)}selected{/if}">
+            <a href="{$blog.link}">{$blog.name}</a>
+        </li>
+    {foreachelse}
+        <li>
+            <a href="{$wa->blog->url()}">[`All posts`]</a>
+        </li>
+    {/foreach}
+
+    {if $theme_settings.header_links != 'blog-pages'}
+        {* display static page list in case it was not yet displayed in the core index.html layout template *}
+        {foreach $wa->blog->pages() as $page}
             <li{if strlen($page.url)>1 && $wa->currentUrl()|strstr:$page.url} class="selected"{/if}><a href="{$page.url}">{$page.name}</a></li>
         {/foreach}
-    </ul>
-{/if}
+    {/if}
+    
+</ul>
+
 

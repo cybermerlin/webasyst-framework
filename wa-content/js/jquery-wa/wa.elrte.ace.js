@@ -66,6 +66,7 @@ function waEditorAceInit(options)
         $('<div id="' +  options.ace_editor_container + '"></div>').insertAfter($('#' + options.id));
     }
     wa_editor = ace.edit(options.ace_editor_container);
+    wa_editor.commands.removeCommand('find');
 
     ace.config.set("basePath", wa_url + 'wa-content/js/ace/');
 
@@ -74,7 +75,7 @@ function waEditorAceInit(options)
 
     if (options.type == 'css') {
         session.setMode("ace/mode/css");
-    } else if (options.type == 'js') {
+    } else if (options.type == 'javascript') {
         session.setMode("ace/mode/javascript");
     } else {
         session.setMode("ace/mode/css");
@@ -197,7 +198,7 @@ function waEditorInit(options) {
     }
     element.elrte({
         height: options.height - 53,
-        cssfiles: [wa_url + "wa-content/css/wa/wa-1.0.css"],
+        cssfiles: [wa_url + "wa-content/css/wa/wa-1.3.css"],
         toolbar: 'waPageToolbar',
         lang: options.lang,
         wa_image_upload: '?module=pages&action=uploadimage',

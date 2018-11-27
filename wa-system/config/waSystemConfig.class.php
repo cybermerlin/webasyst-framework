@@ -12,6 +12,7 @@
  * @package wa-system
  * @subpackage config
  */
+
 class waSystemConfig
 {
     protected $root_path = null;
@@ -54,20 +55,20 @@ class waSystemConfig
         }
 
         $this->configure();
+        $this->environment = $environment;
         $this->init();
 
-        if ($environment === null) {
-            $url = explode("/", $this->getRequestUrl(true));
+        if ($this->environment === null) {
+            $url = explode("/", $this->getRequestUrl(true, true));
             $url = $url[0];
-
             $this->environment = $url === $this->getSystemOption('backend_url') ? 'backend' : 'frontend';
-        } else {
-            $this->environment = $environment;
         }
 
-        $url = $this->getRequestUrl();
-        if ($url === 'robots.txt' || $url === 'favicon.ico' || $url == 'apple-touch-icon.png') {
-            $this->responseStatic($url);
+        if ($this->environment !== 'cli') {
+            $url = $this->getRequestUrl();
+            if ($url === 'robots.txt' || $url === 'favicon.ico' || $url == 'apple-touch-icon.png') {
+                $this->responseStatic($url);
+            }
         }
     }
 
@@ -81,12 +82,23 @@ class waSystemConfig
         $path = waConfig::get('wa_path_data').'/public/site/data/'.$domain.'/'.$file;
         if (!file_exists($path)) {
             if (substr($domain, 0, 4) == 'www.') {
-                $domain = substr($domain, 4);
+                $domain2 = substr($domain, 4);
             } else {
-                $domain = 'www.'.$domain;
+                $domain2 = 'www.'.$domain;
             }
-            $path = waConfig::get('wa_path_data').'/public/site/data/'.$domain.'/'.$file;
+            $path = waConfig::get('wa_path_data').'/public/site/data/'.$domain2.'/'.$file;
         }
+
+        // check alias
+        if (!file_exists($path)) {
+            $routes = $this->getConfigFile('routing');
+            if (!empty($routes[$domain]) && is_string($routes[$domain])) {
+                $path = waConfig::get('wa_path_data').'/public/site/data/'.$routes[$domain].'/'.$file;
+            } elseif (!empty($routes[$domain2]) && is_string($routes[$domain2])) {
+                $path = waConfig::get('wa_path_data').'/public/site/data/'.$routes[$domain2].'/'.$file;
+            }
+        }
+
         if (file_exists($path)) {
             $file_type = waFiles::getMimeType($file);
             header("Content-type: {$file_type}");
@@ -155,14 +167,21 @@ class waSystemConfig
     public function getRootUrl($absolute = false, $script = false)
     {
         if (!self::$root_url) {
-            if (isset($_SERVER['SCRIPT_NAME']) && $_SERVER['SCRIPT_NAME']) {
-                self::$root_url = $_SERVER['SCRIPT_NAME'];
-            } elseif (isset($_SERVER['PHP_SELF']) && $_SERVER['PHP_SELF']) {
-                self::$root_url = $_SERVER['PHP_SELF'];
-            } else {
+            if ($this->environment !== 'cli') {
+                if (isset($_SERVER['SCRIPT_NAME']) && $_SERVER['SCRIPT_NAME']) {
+                    self::$root_url = $_SERVER['SCRIPT_NAME'];
+                } elseif (isset($_SERVER['PHP_SELF']) && $_SERVER['PHP_SELF']) {
+                    self::$root_url = $_SERVER['PHP_SELF'];
+                }
+                self::$root_url = '/'.ltrim(self::$root_url, '/');
+                self::$root_url = preg_replace('!/[^/]*$!', '/', self::$root_url);
+            }
+            if (!self::$root_url) {
+                self::$root_url = $this->systemOption('default_root_url');
+            }
+            if (!self::$root_url) {
                 self::$root_url = '/';
             }
-            self::$root_url = preg_replace('!/[^/]*$!', '/', self::$root_url);
         }
         if ($absolute) {
             $url = $this->getHostUrl();
@@ -173,13 +192,15 @@ class waSystemConfig
 
     public function getHostUrl()
     {
-            if (waRequest::isHttps()) {
-                $url = 'https://';
-            } else {
-                $url = 'http://';
-            }
-            $url .= waRequest::server('HTTP_HOST');
-            return $url;
+        if (waRequest::isHttps()) {
+            $proto = 'https://';
+        } else {
+            $proto = 'http://';
+        }
+
+        $host = waRequest::server('HTTP_HOST', $this->systemOption('default_host_domain'), 'string');
+        $host = ifempty($host, 'localhost');
+        return $proto.$host;
     }
 
     public function getDomain()
@@ -194,29 +215,56 @@ class waSystemConfig
 
     protected function configure()
     {
+        if (!extension_loaded('mbstring') && !function_exists('mb_strlen')) {
+            die('PHP extension mbstring required');
+        }
         @mb_internal_encoding('UTF-8');
         @ini_set('default_charset', 'utf-8');
 
+        // Make sure setlocale() is set to something utf8-compatible if at all possible
+        $sysloc = setlocale(LC_COLLATE, 0);
+        if (false === stripos($sysloc, 'utf-8') && false === stripos($sysloc, 'utf8')) {
+            $sysloc = explode('.', $sysloc, 2);
+            if (count($sysloc) < 2) {
+                $loc = 'en_US';
+            } else {
+                $loc = $sysloc[0];
+            }
+
+            $possible_locales = array();
+            $lang = preg_replace('~_.*~', '', $loc);
+            foreach(array($loc, $lang, 'en_US') as $locale) {
+                foreach(array('utf8','utf-8','UTF8','UTF-8') as $enc) {
+                    $possible_locales[] = $locale.'.'.$enc;
+                }
+            }
+            setlocale(LC_ALL, $possible_locales);
+        }
+
+        // Always use dot separator when formatting floats
+        setlocale(LC_NUMERIC, 'C');
+
         @ini_set('register_globals', 'off');
         // magic quotes
-        @ini_set("magic_quotes_runtime",0);
-        if (version_compare('5.4', PHP_VERSION, '>') && function_exists('set_magic_quotes_runtime') && get_magic_quotes_runtime()){
+        @ini_set("magic_quotes_runtime", 0);
+        if (version_compare('5.4', PHP_VERSION, '>') && function_exists('set_magic_quotes_runtime') && get_magic_quotes_runtime()) {
             @set_magic_quotes_runtime(false);
         }
         // IIS
         if (!isset($_SERVER['REQUEST_URI'])) {
             $_SERVER['REQUEST_URI'] = $_SERVER['PHP_SELF'];
             if (isset($_SERVER['QUERY_STRING']) && strlen($_SERVER['QUERY_STRING'])) {
-                  $_SERVER['REQUEST_URI'].= '?'.$_SERVER['QUERY_STRING'];
-             }
-             self::$system_options['mod_rewrite'] = false;
+                $_SERVER['REQUEST_URI'] .= '?'.$_SERVER['QUERY_STRING'];
+            }
+            self::$system_options['mod_rewrite'] = false;
         }
 
         if (!get_magic_quotes_gpc()) {
             return;
         }
 
-        function array_stripslashes($array) {
+        function array_stripslashes($array)
+        {
             return is_array($array) ? array_map("array_stripslashes", $array) : stripslashes($array);
         }
 
@@ -255,16 +303,17 @@ class waSystemConfig
     {
         $this->root_path = $root_path;
         waConfig::add(array(
-            'wa_path_root'        => $root_path,
-            'wa_path_apps'        => $root_path.DIRECTORY_SEPARATOR.'wa-apps',
+            'wa_path_root'      => $root_path,
+            'wa_path_apps'      => $root_path.DIRECTORY_SEPARATOR.'wa-apps',
             'wa_path_system'    => $root_path.DIRECTORY_SEPARATOR.'wa-system',
-            'wa_path_log'        => $root_path.DIRECTORY_SEPARATOR.'wa-log',
-            'wa_path_data'        => $root_path.DIRECTORY_SEPARATOR.'wa-data',
-            'wa_path_content'        => $root_path.DIRECTORY_SEPARATOR.'wa-content',
+            'wa_path_log'       => $root_path.DIRECTORY_SEPARATOR.'wa-log',
+            'wa_path_data'      => $root_path.DIRECTORY_SEPARATOR.'wa-data',
+            'wa_path_content'   => $root_path.DIRECTORY_SEPARATOR.'wa-content',
             'wa_path_config'    => $root_path.DIRECTORY_SEPARATOR.'wa-config',
-            'wa_path_cache'        => $root_path.DIRECTORY_SEPARATOR.'wa-cache',
-            'wa_path_plugins'    => $root_path.DIRECTORY_SEPARATOR.'wa-plugins',
-            'wa_path_installer'    => $root_path.DIRECTORY_SEPARATOR.'wa-installer',
+            'wa_path_cache'     => $root_path.DIRECTORY_SEPARATOR.'wa-cache',
+            'wa_path_plugins'   => $root_path.DIRECTORY_SEPARATOR.'wa-plugins',
+            'wa_path_installer' => $root_path.DIRECTORY_SEPARATOR.'wa-installer',
+            'wa_path_widgets'   => $root_path.DIRECTORY_SEPARATOR.'wa-widgets',
         ));
     }
 
@@ -293,7 +342,11 @@ class waSystemConfig
     {
         $path = $this->getPath('config', $file);
         if (file_exists($path)) {
-            return include($path);
+            $result = include($path);
+            if ($result === 1) {
+                return $default;
+            }
+            return $result;
         } else {
             return $default;
         }
@@ -309,7 +362,8 @@ class waSystemConfig
             waFiles::create($path);
             return $path;
         } else {
-            return $this->getPath('apps').'/'.$app.'/lib/config/'.$name;
+            $path_name = ($app == 'webasyst') ? 'system' : 'apps';
+            return $this->getPath($path_name).'/'.$app.'/lib/config/'.$name;
         }
     }
 
@@ -318,6 +372,39 @@ class waSystemConfig
         return $this->getConfigFile('routing');
     }
 
+    public function getSms()
+    {
+        return $this->getConfigFile('sms');
+    }
+
+    public function setSms($data)
+    {
+        if (waConfig::get('is_template')) {
+            return false;
+        }
+        $path = $this->getPath('config', 'sms');
+        if (waUtils::varExportToFile($data, $path)) {
+            return true;
+        }
+        return false;
+    }
+
+    public function getMail()
+    {
+        return $this->getConfigFile('mail');
+    }
+
+    public function setMail($data)
+    {
+        if (waConfig::get('is_template')) {
+            return false;
+        }
+        $path = $this->getPath('config', 'mail');
+        if (waUtils::varExportToFile($data, $path)) {
+            return true;
+        }
+        return false;
+    }
 
     public function getAuth()
     {
@@ -331,8 +418,23 @@ class waSystemConfig
         }
     }
 
+    public function getBackendAuth()
+    {
+        $cache = new waRuntimeCache('wa-config/backend_auth');
+        if ($cache->isCached()) {
+            return $cache->get();
+        } else {
+            $data = $this->getConfigFile('backend_auth');
+            $cache->set($data);
+            return $data;
+        }
+    }
+
     public function setAuth($data)
     {
+        if (waConfig::get('is_template')) {
+            return false;
+        }
         $path = $this->getPath('config', 'auth');
         if (waUtils::varExportToFile($data, $path)) {
             $cache = new waRuntimeCache('wa-config/auth');
@@ -342,6 +444,19 @@ class waSystemConfig
         return false;
     }
 
+    public function setBackendAuth($data)
+    {
+        if (waConfig::get('is_template')) {
+            return false;
+        }
+        $path = $this->getPath('config', 'backend_auth');
+        if (waUtils::varExportToFile($data, $path)) {
+            $cache = new waRuntimeCache('wa-config/backend_auth');
+            $cache->set($data);
+            return true;
+        }
+        return false;
+    }
 
     public function getRootPath()
     {

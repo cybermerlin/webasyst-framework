@@ -32,7 +32,7 @@
                 beforeSave: function() {
                     if (!validateDatetime()) {
                         return false;
-                    }                    
+                    }
                     $.wa_blog.editor.onSubmit();
                 },
 
@@ -45,7 +45,7 @@
                     if (self.inlineSaveController.getAction() == 'draft') {
                         $('#post-url-field .small').removeClass('small').addClass('hint');
                     }
-                    
+
                     var dialog = $('#b-post-edit-custom-params-dialog');
                     if (!dialog.is(':hidden')) {
                         var meta_title = dialog.find(':input[name=meta_title]').val();
@@ -79,7 +79,7 @@
                         }
                         dialog.trigger('close');
                     }
-                            
+
                 }
 
             });
@@ -90,14 +90,11 @@
 
             var editor = null;
             try {
-                editor = $.storage.get('blog/editor');
+                editor = $.storage.get('blog/editor') || 'redactor';
             } catch(e) {
                 this.log('Exception: '+e.message + '\nline: '+e.fileName+':'+e.lineNumber);
             }
-
-            if (editor) {
-                editor = editor.replace(/\W+/g,'');
-            } else {
+            if (!editor || !this.editors[editor]) {
                 for(editor in this.editors) {
                     break;
                 }
@@ -108,6 +105,11 @@
                         break;
                     }
                 }
+            }
+
+            // Place cursor into title field for new posts
+            if (!$('#post-form').find('input[name=post_id]').val()) {
+                $('#post-title').focus();
             }
 
             $.wa.dropdownsCloseEnable();
@@ -160,8 +162,19 @@
                 return false;
             });
 
+            // Stick button bar to the bottom of the window
+            var $window = $(window), $buttons_bar = $('#buttons-bar');
+            $buttons_bar.sticky && $('#buttons-bar').sticky({
+                fixed_class: 'b-fixed-button-bar',
+                isStaticVisible: function (e, o) {
+                    return  $window.scrollTop() + $window.height() >= e.element.offset().top + e.element.outerHeight();
+                }
+            });
 
-            //deadline
+            initRealtimePreviewMode();
+
+            // ====== Functions declarations section ========
+
             function initDialogs()
             {
 
@@ -202,8 +215,6 @@
                     return false;
                 }
             }
-
-            // ====== Functions declarations section ========
 
             function setEditDatetimeReady()
             {
@@ -391,10 +402,10 @@
              */
             function setupPostUrlWidget() {
 
-                var postUrlHandler;
                 var cachedSlug = null;
                 var cache = {};
                 var changeBlog = function() {};
+                var blog_settings = {};
 
                 init();
 
@@ -411,12 +422,12 @@
                 {
                     var descriptor = null,
                         request = { 'post_title': postTitle, 'post_id': postId, 'blog_id': blogId },
-                        cache_key = [blogId, postId, postTitle].join('&');
+                        cache_key = [blogId, postId].join('&');
 
-                    if (cache[cache_key]) {
+                    if (cache[cache_key] && (cachedSlug || !postTitle)) {
                         fn(cache[cache_key]);
                     } else {
-                        if (cachedSlug != null) {
+                        if (cachedSlug) {
                             request['slug'] = cachedSlug;
                         }
                         $.ajax({
@@ -435,19 +446,8 @@
                     }
                 }
 
-                /**
-                 *
-                 * Show widget. View of widget depends on descriptor
-                 *
-                 * @param object descriptor
-                 */
-                function show(descriptor)
+                function updateHtml(descriptor)
                 {
-                    if (!descriptor) {
-                        $('#post-url-field').show('fast');
-                        return;
-                    }
-
                     var wholeUrl = descriptor.link + descriptor.slug + '/';
 
                     $('#url-link').text(wholeUrl);
@@ -456,6 +456,7 @@
                             : wholeUrl
                     );
                     $('#pure-url').text(descriptor.link);
+                    $('#preview-url').data('preview-url', descriptor.preview_link);
 
                     if (descriptor.slug && !cachedSlug) {
                         $('#post-url').val(descriptor.slug);
@@ -477,6 +478,7 @@
                                 className: className,
                                 slug: cachedSlug,
                                 link: descriptor.other_links[k],
+                                preview_link: descriptor.other_preview_links[k],
                                 href : descriptor.preview_hash
                                             ? descriptor.other_links[k] + cachedSlug + '/?preview=' + descriptor.preview_hash
                                             : descriptor.other_links[k] + cachedSlug + '/'
@@ -486,7 +488,7 @@
                             ?   '<span class="${className}">${previewText}${link}' +
                                     '<span class="slug">{{if slug}}${slug}/{{/if}}</span>' +
                                 '</span><br>'
-                            : '<span class="${className}">${previewText}<a target="_blank" href="${href}">${link}' +
+                            : '<span class="${className}">${previewText}<a target="_blank" href="${href}" data-preview-url="${preview_link}">${link}' +
                                     '<span class="slug">{{if slug}}${slug}/{{/if}}</span></a>' +
                                 '</span><br>';
 
@@ -498,20 +500,51 @@
 
                         $('#other-urls').html($.tmpl(tmpl, data));
                     }
+                }
 
-                    $('#post-url-field').show('fast');
+                /**
+                 *
+                 * Show widget. View of widget depends on descriptor
+                 *
+                 * @param object descriptor
+                 */
+                function show(descriptor)
+                {
+                    $('#post-url-field-no-settlements').hide('fast');
+                    descriptor && updateHtml(descriptor);
+                    $('#post-url-field').show('fast').trigger($.Event('change', { status: 'visible' }));
                 }
 
                 /**
                  * Hide widget
                  */
-                function hide()
+                function hide(status)
                 {
-                    $('#post-url-field').hide('fast');
-                    $('#post-url').val('');
+                    // 'empty' = no frontend routing for selected blog
+                    // 'hidden' = frontend routing exists, but no title present, and the whole control is hidden
+                    // 'hidden_empty' = no frontend routing and whole control is hidden
+                    status = status || 'hidden';
+                    if (status == 'empty') {
+                        $('#post-url-field-no-settlements').show('fast');
+                    } else {
+                        $('#post-url-field-no-settlements').hide('fast');
+                    }
+                    cachedSlug = null;
+                    var $post_url = $('#post-url').val('');
+
+                    // When there's no frontend routing for this blog, we don't care for URL validation
+                    if (status == 'empty' || status == 'hidden_empty') {
+                        if (!$post_url.siblings('[name="update_url_on_error"]').length) {
+                            $post_url.after($.parseHTML('<input type="hidden" name="update_url_on_error" value="1">'));
+                        }
+                    } else {
+                        $post_url.siblings('[name="update_url_on_error"]').remove();
+                    }
+
+                    $('#post-url-field').hide('fast').trigger($.Event('change', { status: status }));
                 }
 
-                function updateSlugs(slug,preview_hash)
+                function updateSlugs(slug, preview_hash)
                 {
                     if (slug) {
                         cachedSlug = slug;
@@ -531,48 +564,62 @@
                  */
                 function init()
                 {
-                    if (!$('#post-url-field').length || $('#post-url-field').hasClass('no-settlements')) {
-                        changeBlog = function(blog_status) {
-                            if (blog_status == $.wa_blog.editor.blog_statuses['public']) {
-                                show();
-                            } else {
-                                hide();
-                            }
-                        };
-                        return;
-                    }
-                    postUrlHandler = function() {
-                        var postId = $('input[name=post_id]').val();
-                        if (!postId && !this.value) {
-                            hide();
+                    var postUrlHandler = changeBlog = function() {
+                        // Blog app has no frontend at all?
+                        if (!$('#post-url-field').length) {
+                            hide('empty');
                             return;
                         }
+
+                        var title_value = $('#post-title').val();
                         var blogId = $('input[name=blog_id]').val();
-                        getDescriptor(blogId, postId, this.value, function(descriptor) {
-                            if (descriptor && !descriptor.is_private_blog) {
+                        if (blog_settings[blogId] && blog_settings[blogId].no_frontend) {
+                            if (title_value) {
+                                hide('empty');
+                            } else {
+                                hide('hidden_empty');
+                            }
+                            return;
+                        }
+
+                        if (!title_value) {
+                            // Hide control immidiately to be responsive.
+                            // Still need to query afterwards to update HTML and live preview.
+                            hide('hidden');
+                        }
+
+                        var postId = $('input[name=post_id]').val();
+                        getDescriptor(blogId, postId, title_value, function(descriptor) {
+                            if (!descriptor) {
+                                return;
+                            }
+                            if (!blog_settings[blogId]) {
+                                blog_settings[blogId] = {
+                                    id: blogId,
+                                    no_frontend: descriptor.is_private_blog || !descriptor.link
+                                };
+                            }
+
+                            if (blog_settings[blogId].no_frontend) {
+                                if (title_value) {
+                                    hide('empty');
+                                } else {
+                                    hide('hidden_empty');
+                                }
+                            } else if (title_value) {
                                 show(descriptor);
                             } else {
-                                hide();
+                                updateHtml(descriptor);
+                                hide('hidden');
                             }
                         });
                     };
 
+                    $('#post-title').blur(postUrlHandler);
                     var postId = $('#post-form').find('input[name=post_id]').val();
-
-                    if (!postId) {    // only when adding post handle blur-event
-                        $('#post-title').blur(function() {
-                            var self = this;
-                            setTimeout(function() {
-                                if (cachedSlug == null) {
-                                    postUrlHandler.call(self);
-                                }
-                            }, 200);    // first we need wait for .change-blog handler
-                        });
+                    if (postId) {
+                        postUrlHandler();
                     }
-
-                    changeBlog = function() {
-                        postUrlHandler.call($('#post-title').get(0));
-                    };
 
                     $('#url-edit-link').click(setEditReady);
 
@@ -634,9 +681,9 @@
                                 return false;
                             }
                         }
-                        if ($('#post-id').val() && (this.id == 'b-post-save-button' || 
+                        if ($('#post-id').val() && (this.id == 'b-post-save-button' ||
                                 this.id == 'b-post-save-draft-button' ||
-                                this.id == 'b-post-save-custom-params')) 
+                                this.id == 'b-post-save-custom-params'))
                         {
                             inline = true;
                         }
@@ -735,7 +782,6 @@
                         dataType: 'json',
                         type: 'post',
                         success: function(response) {
-
                             if (response.status == 'fail') {
                                 if (!response.errors.datetime) {
                                     $.wa_blog.editor.closeCurrentDialog();
@@ -788,15 +834,312 @@
                 };
             }
 
+            function initRealtimePreviewMode() { "use strict";
+                var $post_form = $('#post-form');
+                var $iframe = $('#realtime-preview-iframe');
+                var $preview_sidebar = $iframe.closest('.sidebar');
+                var animation_in_progress = false;
+                var $fake_textarea = $('<textarea>').hide().appendTo($preview_sidebar);
+                var $post_title = $('#post-title');
+                var $not_available_message = $('#not-available-message');
+                var $wa_header = $('#wa-header');
+                var $fixed_button_bar = $('.b-fixed-button-bar');
+                var $album_selector = $('#blog-photo_bridge-editor [name="album_id"]');
+                var $hidden_realtime_on = $preview_sidebar.find('[name="realtime_on"]');
+
+                var iframe_visible = false;
+                var iframe_loaded = false;
+                $iframe.one('load', function() {
+                    iframe_loaded = true;
+                });
+                $.pm.bind('updater_loaded', function(data) {
+                    iframe_loaded = true;
+                });
+
+                // Resize columns when user drags the resize handler
+                $.widget('ui.blog_draghandler', $.ui.mouse, {
+                    _init: function(){
+                        this._mouseInit(); // start up the mouse handling
+                        this.$content = $post_form.find('.content');
+                    },
+                    _mouseStart: function(e){
+                        this.xStart = e.pageX;
+                        this.sidebar_width = $preview_sidebar.width();
+                        this.window_width = $(window).width();
+                        if (iframe_visible) {
+                            $iframe.hide();
+                        }
+                    },
+                    _mouseDrag: function(e) {
+                        this.sidebar_width += this.xStart - e.pageX;
+                        this.xStart = e.pageX;
+
+                        if (this.sidebar_width < 320) {
+                            this.sidebar_width = 320;
+                        } else if (this.window_width - this.sidebar_width < 380) {
+                            this.sidebar_width = this.window_width - 380;
+                        }
+                        $preview_sidebar.width(this.sidebar_width);
+                        this.$content.css({
+                            marginRight: this.sidebar_width+'px'
+                        });
+                        $fixed_button_bar.css('right', (this.sidebar_width+16)+'px');
+                        $(window).resize();
+                    },
+                    _mouseStop: function() {
+                        if (iframe_visible) {
+                            $iframe.show();
+                        }
+
+                        $.storage.set('blog/editor/preview_sidebar_width', this.sidebar_width);
+                    }
+                });
+                $preview_sidebar.find('.column-resize-handler:first').blog_draghandler();
+
+                // Toggle realtime preview mode when user clicks on an icon
+                $('#realtime-preview-toggle').click(function() {
+                    if (animation_in_progress) {
+                        return;
+                    }
+                    if (!$post_form.hasClass('realtime-edit-mode')) {
+                        $post_form.addClass('realtime-edit-mode');
+                        $(this).addClass('b-close-live-editor');
+                        realtimeOn();
+                    } else {
+                        $post_form.removeClass('realtime-edit-mode');
+                        $(this).removeClass('b-close-live-editor');
+                        realtimeOff();
+                    }
+                });
+
+                // Update blog title in iframe in real time as user types
+                $post_title.keyup(function() {
+                    setIframePostTitle($post_title.val());
+                });
+
+                // Every once in a while update post contents in iframe
+                setInterval(function() {
+                    if (!iframe_loaded || !$post_form.hasClass('realtime-edit-mode')) {
+                        return;
+                    }
+                    var current_id = null;
+                    var current_item = $('#post-form .b-post-editor-toggle li.selected a');
+                    current_id = current_item.attr('id');
+                    if(current_id && $.wa_blog.editor.editors[current_id]) {
+                        $.wa_blog.editor.editors[current_id].update($fake_textarea);
+                    }
+                    setIframePostTitle($post_title.val());
+                    setIframePostContent($fake_textarea.val());
+                }, 500);
+
+                // Change preview template when user clicks on a preview link while in real-time preview mode
+                $('#post-url-field').on('click', 'a', function() {
+                    if (!$post_form.hasClass('realtime-edit-mode')) {
+                        return;
+                    }
+
+                    var template_url = getTemplateUrl($(this));
+                    if (template_url != $iframe.attr('src')) {
+                        $iframe.attr('src', template_url);
+                        var iframe_loaded = false;
+                        $iframe.one('load', function() {
+                            iframe_loaded = true;
+                        });
+                    }
+                    return false;
+                });
+
+                // Change preview template when user changes a blog
+                $('#post-url-field').change(function(e) {
+                    if (!$post_form.hasClass('realtime-edit-mode')) {
+                        return;
+                    }
+
+                    if (e.status != 'empty' && e.status != 'hidden_empty') {
+                        showIframe();
+                        ensureTemplate();
+                    } else {
+                        hideIframe();
+                    }
+                });
+
+                // Update iframe height when content changes
+                /*$.pm.bind('update_height', function(data) {
+                    $iframe.height(parseInt(data));
+                });*/
+
+                // Height of an iframe depends on height of a window
+                $(window).resize(function() {
+                    $iframe.height($(window).height() - 30);
+                    $iframe.width($preview_sidebar.width() - 10);
+                });
+
+                //
+                // End of initialization. Function declarations below.
+                //
+
+                // Helper to send post title into the iframe
+                function setIframePostTitle(str) {
+                    $.pm({
+                        target: $iframe[0].contentWindow,
+                        type: 'update_title',
+                        data: str
+                    });
+                }
+
+                // Helper to send post text into the iframe
+                function setIframePostContent(str) {
+                    if ($album_selector.val()) {
+                        str += '<p class="attached-album-description"><em>';
+                        str += $_('Photos from the attached album will be displayed here.');
+                        str += '</em></p>';
+                    }
+                    $.pm({
+                        target: $iframe[0].contentWindow,
+                        type: 'update_text',
+                        data: str
+                    });
+                }
+
+                // When $iframe src does not match any of static preview links,
+                // change src to match the first <a>
+                function ensureTemplate() {
+                    var url = getAnyTemplateUrl();
+                    if (url && url != $iframe.attr('src')) {
+                        $iframe.attr('src', url);
+                        var iframe_loaded = false;
+                        $iframe.one('load', function() {
+                            iframe_loaded = true;
+                        });
+                    }
+                }
+
+                // URL of preview template using data from an <a> element of static preview link
+                function getTemplateUrl($a) {
+                    return $a.data('preview-url') || '';
+                }
+
+                function getAnyTemplateUrl() {
+                    var any_url = null;
+                    $('#post-url-field a').each(function() {
+                        var url = getTemplateUrl($(this));
+                        if (!url || url.substr(0, 11) == 'javascript:') {
+                            return;
+                        }
+                        if ($iframe.attr('src') == url) {
+                            any_url = null;
+                            return false;
+                        }
+                        any_url = url;
+                    });
+
+                    if (!any_url) {
+                        any_url = $iframe.attr('src');
+                        if (any_url == 'about:blank') {
+                            any_url = null;
+                        }
+                    }
+
+                    return any_url;
+                }
+
+                // When real-time preview mode is on, show iframe and hide error message
+                function showIframe() {
+                    $iframe.show();
+                    $not_available_message.hide();
+                    iframe_visible = true;
+                }
+
+                // When real-time preview mode is on, hide preview and show a message saying that preview is not available
+                function hideIframe() {
+                    $iframe.hide();
+                    $not_available_message.show();
+                    iframe_visible = false;
+                }
+
+                // Animation to toggle real-time preview mode on
+                function realtimeOn() {
+                    if (!$('#post-url-field-no-settlements').is(':visible') && getAnyTemplateUrl()) {
+                        showIframe();
+                        ensureTemplate();
+                    } else {
+                        hideIframe();
+                    }
+
+                    $hidden_realtime_on.val('1');
+                    animation_in_progress = true;
+                    var right_sidebar_width = $.storage.get('blog/editor/preview_sidebar_width') || 600;
+
+                    var $sidebars = $('.sidebar').hide();
+                    var sidebar200px_width = $sidebars.first().width()-0;
+
+                    $post_form.closest('.content').animate({
+                        marginLeft: 0
+                    }, 400);
+
+                    $fixed_button_bar.css({
+                        'min-width': 0,
+                        right: (sidebar200px_width+16)+'px'
+                    }).animate({
+                        left: '15px',
+                        right: (right_sidebar_width-0+15)+'px'
+                    }, 400);
+
+                    $post_form.find('.content').animate({
+                        marginRight: right_sidebar_width+'px'
+                    }, 400);
+                    $preview_sidebar.css('width', 0).show().animate({
+                        width: right_sidebar_width+'px'
+                    }, 400);
+                    $wa_header.slideUp(400);
+                    setTimeout(function() {
+                        animation_in_progress = false;
+                        $(window).resize().scroll();
+                    }, 410);
+                }
+
+                // Animation to toggle real-time preview mode off
+                function realtimeOff() {
+
+                    $hidden_realtime_on.val('');
+                    var $sidebars = $('.sidebar');
+                    var sidebar200px_width = $sidebars.first().width()-0;
+
+                    animation_in_progress = true;
+                    var $outer_content = $post_form.closest('.content').animate({
+                        marginLeft: sidebar200px_width+'px'
+                    }, 400);
+                    var $inner_content = $post_form.find('.content').animate({
+                        marginRight: sidebar200px_width+'px'
+                    }, 400);
+                    $preview_sidebar.hide();
+                    $wa_header.slideDown(400);
+                    $fixed_button_bar.animate({
+                        left: (sidebar200px_width+15)+'px',
+                        right: (sidebar200px_width+16)+'px'
+                    }, 400);
+                    setTimeout(function() {
+                        $sidebars.show();
+                        $preview_sidebar.hide();
+                        animation_in_progress = false;
+                        $outer_content.css('marginLeft', '');
+                        $inner_content.css('marginRight', '');
+                        $fixed_button_bar.css({
+                            left: '',
+                            right: ''
+                        });
+                        $(window).resize().scroll();
+                    }, 410);
+                }
+            }
         },
-        cloneTextarea: function(textarea,wrapper,editor)
-        {
+        cloneTextarea: function($textarea,wrapper,editor) {
             var id = "editor_container_"+editor;
-            $(wrapper).append(textarea.clone(true).attr({'id':id,'name':'text_'+editor,'disabled':true}));
-            textarea.hide();
+            $(wrapper).append($textarea.clone(true).attr({'id':id,'name':'text_'+editor,'disabled':true}));
+            $textarea.hide();
             return id;
         },
-        cut_hr: '<span class="b-elrte-wa-split-vertical" id="elrte-wa_post_cut">%text%</span>',
+        cut_hr: '<span class="b-elrte-wa-split-vertical elrte-wa_post_cut">%text%</span>',
         cut_str: '<!-- more %text%-->',
         htmlToWysiwyg: function(text) {
             return text.replace(/<!--[\s]*?more[\s]*?(text[\s]*?=[\s]*?['"]([\s\S]*?)['"])*[\s]*?-->/g, function(cut_str, p1, p2) {
@@ -804,16 +1147,16 @@
             });
         },
         wysiwygToHtml: function(text) {
-            var tmp = $('<p></p>').html($(text));
-            if (tmp.find('#elrte-wa_post_cut').length) {
-                var cut_item = tmp.find('#elrte-wa_post_cut');
+            var tmp = $('<p></p>').html(text);
+            var cut_item = tmp.find('.elrte-wa_post_cut');
+            if (cut_item.length) {
                 var p = cut_item.html();
                 if (!p || p === '<br>' || p === $.wa_blog.editor.options.cut_link_label_default) {
                     cut_item.replaceWith($.wa_blog.editor.cut_str.replace('%text%', ''));
                 } else {
                     cut_item.replaceWith($.wa_blog.editor.cut_str.replace('%text%', 'text="' + p + '" '));
                 }
-                return tmp.html();
+                return tmp.html().replace('<span></span>', '');
             } else {
                 return text;
             }
@@ -823,14 +1166,13 @@
                 editor:null,
                 container: null,
                 inited: false,
-                init : function(textarea) {
+                init : function($textarea) {
                     if(!this.inited) {
 
                         this.inited = true;
                         var options = $.wa_blog.editor.options;
                         this.container = $('<div id="blog-ace-editor"></div>').appendTo("#post_text_wrapper");
                         this.container.wrap('<div class="ace"></div>');
-                        var height = $.wa_blog.editor.calcEditorHeight();
 
                         this.editor = ace.edit('blog-ace-editor');
                         ace.config.set("basePath", wa_url + 'wa-content/js/ace/');
@@ -843,13 +1185,21 @@
                         session.setMode("ace/mode/html");
                         session.setMode("ace/mode/smarty");
                         session.setUseWrapMode(true);
+                        this.editor.$blockScrolling = Infinity;
                         this.editor.renderer.setShowGutter(false);
                         this.editor.setShowPrintMargin(false);
                         this.editor.setFontSize(13);
                         $('.ace_editor').css('fontFamily', '');
-                        session.setValue(textarea.hide().val());
-                        this.editor.focus();
+                        session.setValue($textarea.hide().val());
                         this.editor.moveCursorTo(0, 0);
+
+                        if (navigator.appVersion.indexOf('Mac') != -1) {
+                            this.editor.setFontSize(13);
+                        } else if (navigator.appVersion.indexOf('Linux') != -1) {
+                            this.editor.setFontSize(16);
+                        } else {
+                            this.editor.setFontSize(14);
+                        }
 
                         this.editor.commands.addCommand({
                             name: "unfind",
@@ -863,19 +1213,17 @@
                             readOnly: true
                         });
 
+                        var sidebarHeight = $('#post-form .sidebar .b-edit-options:first').height();
                         var heightUpdateFunction = function(editor, editor_id) {
-
                             // http://stackoverflow.com/questions/11584061/
                             var newHeight = editor.getSession().getScreenLength() * editor.renderer.lineHeight + editor.renderer.scrollBar.getWidth();
-
                             newHeight *= 1.02; //slightly extend editor height
 
-                            var sidebarHeight = $('#post-form .sidebar:first .b-edit-options').height();
                             var minHeight = sidebarHeight - 163;
-
                             if (newHeight < minHeight) {
                                 newHeight = minHeight;
                             }
+
                             $('#' + editor_id).height(newHeight.toString() + "px");
 
                             // This call is required for the editor to fix all of
@@ -884,17 +1232,18 @@
                         };
 
                         var self = this;
+                        var $window = $(window);
 
                         // Whenever a change happens inside the ACE editor, update
                         // the size again
                         session.on('change', function() {
                             heightUpdateFunction(self.editor, "blog-ace-editor");
+                            $window.scroll(); // trigger sticky bottom buttons
                         });
                         setTimeout(function() {
                             heightUpdateFunction(self.editor, "blog-ace-editor");
                         }, 50);
-
-                        $(window).resize(function() {
+                        $window.resize(function() {
                             self.editor.resize();
                             heightUpdateFunction(self.editor, "blog-ace-editor");
                         });
@@ -905,33 +1254,35 @@
 
                     return true;
                 },
-                show: function(textarea) {
+                show: function($textarea) {
                     this.container.show();
                     this.container.parent().show();
                     var self = this;
-                    setTimeout(function() {
-                        if(self.editor/* && self.editor.editor*/) {
-                            var text = $.wa_blog.editor.wysiwygToHtml(textarea.val());
-                            var p = self.editor.getCursorPosition();
-                            self.editor.setValue(text);
+
+                    if(self.editor/* && self.editor.editor*/) {
+                        var text = $textarea.val();
+                        text = $.wa_blog.editor.wysiwygToHtml(text);
+                        var p = self.editor.getCursorPosition();
+                        self.editor.setValue(text);
+                        if (!$('#post-title').is(':focus')) {
                             self.editor.focus();
-                            self.editor.navigateTo(p.row, p.column);
-                        } else {
-                            if(typeof(console) == 'object') {
-                                console.log('wait for ace editor init');
-                            }
-                            self.show(textarea);
                         }
-                    },100);
+                        self.editor.navigateTo(p.row, p.column);
+                    } else {
+                        if(typeof(console) == 'object') {
+                            console.log('wait for ace editor init');
+                        }
+                        self.show($textarea);
+                    }
 
                 },
                 hide: function() {
                     this.container.hide();
                     this.container.parent().hide();
                 },
-                update : function(textarea) {
+                update : function($textarea) {
                     if(this.inited) {
-                        textarea.val(this.editor.getValue());
+                        $textarea.val(this.editor.getValue());
                     }
                 },
                 correctEditorHeight: function(height) {
@@ -942,30 +1293,65 @@
                 options: {},
                 inited:false,
                 callback:false,
-                init : function(textarea) {
+                editor: null,
+                init : function($textarea) {
                     if(!this.inited) {
-                        
+                        var $window = $(window);
+                        var $save_button = $('#b-post-save-button');
+                        var $postpublish_edit = $('#postpublish-edit');
+                        var sidebar_height = $('#post-form .sidebar .b-edit-options:first').height();
+
                         var options = $.extend({
-                            //boldTag: 'b',
-                            //italicTag: 'i',
+                            focus: true,
                             deniedTags: false,
-                            minHeight: 300,
-                            buttonSource: false,
-                            paragraphy: true,
-                            convertDivs: true,
-                            toolbarFixedBox: true,
-                            buttons: ['html', 'formatting', 'bold', 'italic', 'underline', 'deleted', 'unorderedlist', 'orderedlist',
-                                'outdent', 'indent', 'image', 'video', 'file', 'table', 'link', 'alignment', '|',
-                                'horizontalrule'],
-                            plugins: ['fontcolor', 'fontsize', 'fontfamily', 'table', 'video', 'cut'],
+                            minHeight: 300, //minHeight: Math.max(300, sidebar_height - 229),
+                            linkify: false,
+                            source: false,
+                            paragraphy: false,
+                            replaceDivs: false,
+                            toolbarFixed: true,
+                            replaceTags: {
+                                'b': 'strong',
+                                'i': 'em',
+                                'strike': 'del'
+                            },
+                            removeNewlines: false,
+                            removeComments: false,
+                            imagePosition: true,
+                            imageResizable: true,
+                            imageFloatMargin: '1.5em',
+                            buttons: ['format', 'bold', 'italic', 'underline', 'deleted', 'lists',
+                                'image', 'video', 'file', 'table', 'link', 'alignment', 'fontcolor', 'fontsize', 'fontfamily'],
+                            plugins: ['fontcolor', 'fontfamily', 'alignment', 'fontsize', 'table', 'video', 'cut'],
                             lang: wa_lang,
-                            imageUpload: '?module=pages&action=uploadimage&filelink=1&absolute=1',
-                            uploadImageFields: textarea.data('uploadFields'),
-                            //imageUpload: '?module=post&action=image',
-                            imageUploadErrorCallback: function(json) {
+                            imageUpload: '?action=upload&r=2&absolute=1',
+                            imageUploadFields: $textarea.data('uploadFields'),
+                            callbacks: {
+                                change: function () {
+                                    if ($postpublish_edit.is(':visible')) {
+                                        $postpublish_edit.removeClass('green').addClass('yellow');
+                                    }
+                                    if ($save_button.is(':visible')) {
+                                        $save_button.removeClass('green').addClass('yellow');
+                                    }
+                                    // Make sure sticky bottom buttons behave correctly when height of an editor changes
+                                    $window.scroll();
+                                }
+                            }
+                        }, (options || {}));
+
+                        options.callbacks = $.extend({
+                            imageUploadError: function(json) {
+                                console.log('imageUploadError', json);
                                 alert(json.error);
                             },
-                            syncBeforeCallback: function(html) {
+                            syncClean: function (html) {
+                                // Unescape '->' in smarty tags
+                                return html.replace(/\{[a-z\$'"_\(!+\-][^\}]*\}/gi, function (match) {
+                                    return match.replace(/-&gt;/g, '->');
+                                });
+                            },
+                            syncBefore: function (html) {
                                 html = html.replace(/{[a-z$][^}]*}/gi, function (match, offset, full) {
                                     var i = full.indexOf("</script", offset + match.length);
                                     var j = full.indexOf('<script', offset + match.length);
@@ -977,46 +1363,202 @@
                                     }
                                     return match;
                                 });
+
                                 return html;
-                            },
-                            changeCallback: function() {
-                                if ($('#postpublish-edit').is(':visible')) {
-                                    $('#postpublish-edit').removeClass('green').addClass('yellow');
-                                }
-                                if ($('#b-post-save-button').is(':visible')) {
-                                    $('#b-post-save-button').removeClass('green').addClass('yellow');
-                                }
                             }
-                        }, (options || {}));
-                        textarea.redactor(options);
-                        textarea.redactor('core.getBox').css('z-index', 0);
-                        textarea.redactor('core.getToolbar').css('z-index', 1);
+                        }, (options.callbacks || {}));
+
+                        // Modify image upload dialog to include tab from Photos app
+                        if ($.wa_blog_options.photos_bridge_available) {
+                            options.callbacks.modalOpened = function(name, $modal_wrapper) {
+                                if (name != 'image') {
+                                    return;
+                                }
+
+                                var redactor = this;
+                                this.modal.width = 1100;
+                                var $modal = this.modal.getModal();
+
+                                // Contents of Select tab
+                                var $photos_selector_wrapper = $('<div id="photos-image-selector-wrapper">');
+                                var $custom_tab = $('<div class="redactor-modal-tab redactor-tab1" data-title="'+ $_('Select from Photos app') +'">').hide().append($photos_selector_wrapper).append('<div class="clear-both">');
+                                var $total_photos_selected = $custom_tab.find('.total-photos-selected'); // !!! currently not used
+
+                                // Tab headers
+                                $modal.append($custom_tab);
+                                this.modal.buildTabber();
+
+                                // Controller for Photos selector tab
+                                (function() {
+                                    var total_photos_selected = 0;
+                                    var selected_photos = {}; // id => url
+
+                                    // Insert photos to blog post when user clicks on a button
+                                    var $insert_button = $('<button id="redactor-modal-button-action" style="margin-top: 16px;">' + redactor.lang.get('insert') + '</button>').hide();
+                                    $custom_tab.append($insert_button);
+
+                                    // Cancel button closes the dialog
+                                    var $cancel_button = $('<button id="redactor-modal-button-cancel" style="margin-top: 16px;">' + redactor.lang.get('cancel') + '</button>').hide();
+                                    $custom_tab.append($cancel_button);
+
+                                    // Load content from Photos app when user goes to its tab
+                                    $('#redactor-modal-tabber a[rel="1"]').on('click', function() {
+                                        if ($insert_button.is(':visible')) {
+                                            return;
+                                        }
+                                        $insert_button.show();
+                                        $cancel_button.show();
+                                        $photos_selector_wrapper.html('<div class="block"><i class="icon16 loading"></i></div>');
+                                        $.post('../photos/?module=photo&action=embedSelector', { app_id: 'blog' }, function(r) {
+                                            $photos_selector_wrapper.html(r);
+                                            updateEmbeddedHtml();
+                                        });
+                                    });
+                                    $cancel_button.off('click').on('click', function() {
+                                        redactor.modal.close();
+                                    });
+                                    $insert_button.on('click', function() {
+                                        if (total_photos_selected > 0) {
+                                            var html = [];
+                                            $.each(selected_photos, function(photo_id, photo_url) {
+                                                html.push('<figure><img src="'+photo_url+'"></figure>');
+                                            });
+                                            redactor.insert.html(html.join("\n"));
+                                        }
+                                        redactor.modal.close();
+                                    });
+
+                                    // Hide buttons when user switches back to Upload tab
+                                    $('#redactor-modal-tabber a[rel="0"]').on('click', function() {
+                                        $insert_button.hide();
+                                        $cancel_button.hide();
+                                    });
+
+                                    // When user selects or deselects a photo, remember it and update UI
+                                    $photos_selector_wrapper.on('change', 'input:checkbox', function() {
+                                        var $checkbox = $(this);
+                                        var photo_id = $checkbox.val();
+                                        if (this.checked) {
+                                            if (!selected_photos[photo_id]) {
+                                                selected_photos[photo_id] = $checkbox.data('photoUrl');
+                                                total_photos_selected++;
+                                            }
+                                        } else {
+                                            if (selected_photos[photo_id]) {
+                                                delete selected_photos[photo_id];
+                                                total_photos_selected--;
+                                            }
+                                        }
+
+                                        if (total_photos_selected > 0) {
+                                            $total_photos_selected.text(total_photos_selected).closest('.hidden').show();
+                                        } else {
+                                            $total_photos_selected.text(total_photos_selected).closest('.hidden').hide();
+                                        }
+                                    });
+
+                                    // Highlight previously selected photos again when user changes album
+                                    $photos_selector_wrapper.on('reloaded', function(e) {
+                                        updateEmbeddedHtml();
+                                    });
+
+                                    function updateEmbeddedHtml() {
+                                        $photos_selector_wrapper.find('input:checkbox').each(function() {
+                                            if (selected_photos[this.value]) {
+                                                $(this).prop('checked', true).change();
+                                            }
+                                        });
+                                        $(window).resize();
+                                    }
+                                })();
+                            };
+                        }
+
+                        $textarea.redactor(options);
+                        $textarea.redactor('core.box').css('z-index', 0);
+                        $textarea.redactor('core.toolbar').css('z-index', 1);
+                        this.editor = $textarea.data('redactor');
                         this.inited = true;
                     }
                     return true;
                 },
-                show: function(textarea) {
-                    var text = $.wa_blog.editor.htmlToWysiwyg(textarea.val());
-                    textarea.val(text);
-                    
+                show: function($textarea) {
+                    var text = $.wa_blog.editor.htmlToWysiwyg($textarea.val());
+                    $textarea.val(text);
+
                     $('.redactor-box').show();
-                    textarea.redactor('core.getEditor').find('img[src*="$wa_url"]').each(function () {
+                    $textarea.redactor('core.editor').find('img[src*="$wa_url"]').each(function () {
                         var s = decodeURIComponent($(this).attr('src'));
                         $(this).attr('data-src', s);
                         $(this).attr('src', s.replace(/\{\$wa_url\}/, wa_url));
                     });
-                    textarea.redactor('code.set', textarea.val());
-                    textarea.redactor('observe.load');
-                    textarea.redactor('focus.setStart');
+                    this.editor.code.set($textarea.val());
+                    this.editor.observe.load();
+                    this.editor.focus.start();
                 },
                 hide: function(textarea) {
                     $('.redactor-box').hide();
                 },
-                update : function(textarea) {
+                update : function($textarea) {
                     if(this.inited) {
-                        //textarea.val($('#editor_container_elrte').elrte('val'));
-                        textarea.val(textarea.redactor('code.get'));
+                        var code = this.editor.code.get();
+                        code = this.editor.clean.onSync(
+                            this.editor.clean.onSet(code)
+                        );
+                        code = $.wa_blog.editor.wysiwygToHtml(code);
+                        $textarea.val(code);
                     }
+                }
+            },
+            photo_bridge : {
+                container: null,
+                inited: false,
+                init : function($textarea) {
+                    if(!this.inited) {
+                        this.inited = true;
+                        $textarea.hide();
+                        this.container = $('#blog-photo_bridge-editor');
+                        if (!this.container.length) {
+                            return;
+                        }
+
+                        var $album_frontend_link = $('#album-frontend-link');
+                        var $album_selector = this.container.find('select[name="album_id"]');
+                        var $fields_public_only = this.container.find('.hidden.field');
+
+                        var delay = 0;
+                        $album_selector.change(function() {
+                            if ($album_selector.val()) {
+                                var frontend_link = $album_selector.children(':selected').data('frontend-link');
+                                if (frontend_link) {
+                                    $fields_public_only.slideDown(delay);
+                                    $album_frontend_link.text(frontend_link);
+                                } else {
+                                    $fields_public_only.slideUp(delay);
+                                    $fields_public_only.find('[name="album_link_type"]:checkbox').prop('checked', false);
+                                }
+                                $('#post-editor .show-when-album-selected').show();
+                            } else {
+                                $fields_public_only.slideUp(delay);
+                                $('#post-editor .show-when-album-selected').hide();
+                            }
+                        }).change();
+                        delay = 300;
+
+                        var sidebar_height = $('#post-form .sidebar .b-edit-options:first').height();
+                        this.container.css('min-height', sidebar_height - 100);
+                    }
+                    return true;
+                },
+                show: function(textarea) {
+                    this.container.show();
+                    var self = this;
+                },
+                hide: function() {
+                    this.container.hide();
+                },
+                update: function(textarea) {
+                    // Nothing to do!
                 }
             }
         },
@@ -1025,12 +1567,6 @@
         },
         getExtHeightShift: function() {
             return -70;
-        },
-        calcEditorHeight: function() {
-            var viewedAreaHeight = $(document.documentElement).height();
-            var editorAreaHeightOffset = $('#post-editor').offset();
-            var buttonsBarHeight = $('#buttons-bar').outerHeight(true);
-            return height = viewedAreaHeight - editorAreaHeightOffset.top - buttonsBarHeight;
         },
         editorTooggle : function() {
             var self = $(this);
@@ -1043,10 +1579,10 @@
         },
         selectEditor : function(id, external) {
             if (this.editors[id]) {
-                var textarea = $("#" + this.options['content_id']);
-                if(textarea.length) {
+                var $textarea = $("#" + this.options['content_id']);
+                if($textarea.length) {
                     try {
-                        if(this.editors[id].init(textarea)) {
+                        if(this.editors[id].init($textarea)) {
                             var current_id = null;
                             if (!external) {
                                 try {
@@ -1060,13 +1596,16 @@
                             if(current_item.length) {
                                 current_item.parent().removeClass('selected');
                                 if(current_id = current_item.attr('id')) {
-                                    this.editors[current_id].update(textarea);
+                                    this.editors[current_id].update($textarea);
                                     this.editors[current_id].hide();
                                 }
                             }
 
                             $('#' + id).parent().addClass('selected');
-                            this.editors[id].show(textarea);
+                            this.editors[id].show($textarea);
+
+                            // Make sure sticky bottom buttons behave correctly when height of an editor changes
+                            setTimeout(function() { $(window).scroll(); }, 0);
                         }
                     } catch(e) {
                         this.log('Exception: '+e.message + '\nline: '+e.fileName+':'+e.lineNumber, e.stack);
@@ -1133,13 +1672,13 @@
                 }
             }
 
-            var textarea = $("#" + this.options['content_id']);
+            var $textarea = $("#" + this.options['content_id']);
 
-            if(textarea.length) {
+            if($textarea.length) {
                 var current_id = null;
                 var current_item = $('.b-post-editor-toggle li.selected a');
                 if(current_item.length && (current_id = current_item.attr('id')) ) {
-                    this.editors[current_id].update(textarea);
+                    this.editors[current_id].update($textarea);
                 }
             }
 
@@ -1232,4 +1771,3 @@
     };
 
 })(jQuery);
-

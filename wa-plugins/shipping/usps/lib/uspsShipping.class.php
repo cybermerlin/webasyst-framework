@@ -95,7 +95,7 @@ class uspsShipping extends waShipping
         return $items;
     }
 
-    public function calculate()
+    protected function calculate()
     {
         $this->correctItems();
         $rates = $this->executeQuery(
@@ -218,20 +218,22 @@ class uspsShipping extends waShipping
         );
 
         $forms = array();
-        foreach ($all_forms as $name => $form) {
-            $query_name = implode('', array_map("ucfirst", explode('_', $name)));
-            $query = $this->getQuery('labels' . $query_name, true);
-            $service = $this->getServiceCodeByOrder($order);
-            $type = uspsServices::getServiceType($service['id']);
+        if ($order !== null) {
+            foreach ($all_forms as $name => $form) {
+                $query_name = implode('', array_map("ucfirst", explode('_', $name)));
+                $query = $this->getQuery('labels' . $query_name, true);
+                $service = $this->getServiceCodeByOrder($order);
+                $type = uspsServices::getServiceType($service['id']);
 
-            if ($name == 'international_shipping') {
-                if ($type == uspsServices::TYPE_INTERNATIONAL) {
-                    $forms[$name] = $form;
-                }
-            } else {
+                if ($name == 'international_shipping') {
+                    if ($type == uspsServices::TYPE_INTERNATIONAL) {
+                        $forms[$name] = $form;
+                    }
+                } else {
 
-                if ($type == uspsServices::TYPE_DOMESTIC && call_user_func_array(array($query,'isSupportedService'),array($service['code']))) {
-                    $forms[$name] = $form;
+                    if ($type == uspsServices::TYPE_DOMESTIC && call_user_func_array(array($query, 'isSupportedService'), array($service['code']))) {
+                        $forms[$name] = $form;
+                    }
                 }
             }
         }

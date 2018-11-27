@@ -83,7 +83,9 @@ class waSystem
                  */
                 $system = self::$instances[self::$current];
                 $locale = $set_current ? $system->getLocale() : null;
-                $config = SystemConfig::getAppConfig($name, $system->getEnv(), $system->config->getRootPath(), $locale);
+                if (self::$apps === null || !empty(self::$apps[$name])) {
+                    $config = SystemConfig::getAppConfig($name, $system->getEnv(), $system->config->getRootPath(), $locale);
+                }
             }
             if ($config) {
                 self::$instances[$name] = new self($config);
@@ -109,12 +111,20 @@ class waSystem
     {
         if (isset(self::$instances[$name])) {
             self::$current = $name;
-            /**
-             * @var $s waSystem
-             */
+            /** @var $s waSystem */
             $s = self::$instances[$name];
-            $s->getConfig()->setLocale($s->getLocale());
+
+            // Load application locale. Make sure it's an app,
+            // since waSystemConfig does not have locale-related methods.
+            if ($s->getConfig() instanceof waAppConfig) {
+                $s->getConfig()->setLocale($s->getLocale());
+            }
         }
+    }
+
+    public static function isLoaded($app_id)
+    {
+        return isset(self::$instances[$app_id]);
     }
 
     public function loadFactories()
@@ -159,11 +169,48 @@ class waSystem
 
     /**
      * @param array $options
-     * @return waCaptcha
+     * @return waAbstractCaptcha
      */
     public function getCaptcha($options = array())
     {
         return $this->getFactory('captcha', 'waCaptcha', $options);
+    }
+
+    /**
+     * @param null|waDomainAuthConfig|string $domain_config
+     * @param array $options
+     * @return waSignupForm
+     */
+    public function getSignupForm($domain_config = null, $options = array())
+    {
+        return $this->getFactory('signup_form', 'waSignupForm', $options, $domain_config);
+    }
+
+    /**
+     * @param array $options
+     * @return waFrontendLoginForm
+     */
+    public function getLoginForm($options = array())
+    {
+        return $this->getFactory('login_form', 'waFrontendLoginForm', $options);
+    }
+
+    /**
+     * @param array $options
+     * @return waFrontendForgotPasswordForm
+     */
+    public function getForgotPasswordForm($options = array())
+    {
+        return $this->getFactory('forgotpassword_form', 'waFrontendForgotPasswordForm', $options);
+    }
+
+    /**
+     * @param array $options
+     * @return waFrontendSetPasswordForm
+     */
+    public function getSetPasswordForm($options = array())
+    {
+        return $this->getFactory('setpassword_form', 'waFrontendSetPasswordForm', $options);
     }
 
     /**
@@ -181,11 +228,14 @@ class waSystem
      * @param string $class
      * @param array $options
      * @param mixed $first_param
-     * @return mixed
+     * @return object
      */
     protected function getFactory($name, $class, $options = array(), $first_param = false)
     {
-        if ($config = $this->getConfig()->getFactory($name)) {
+        if (isset($this->factories[$name])) {
+            return $this->factories[$name];
+        }
+        if (($config = $this->getConfig()->getFactory($name))) {
             if (is_array($config)) {
                 $class = $config[0];
                 $options = isset($config[1]) ? $config[1] : $options;
@@ -193,12 +243,13 @@ class waSystem
                 $class = $config;
             }
         }
-        if (!isset($this->factories[$name])) {
-            if ($first_param !== false) {
-                $this->factories[$name] = new $class($first_param, $options);
-            } else {
-                $this->factories[$name] = new $class($options);
-            }
+        if (!class_exists($class)) {
+            throw new waException('Unable to load factory class '.$class);
+        }
+        if ($first_param !== false) {
+            $this->factories[$name] = new $class($first_param, $options);
+        } else {
+            $this->factories[$name] = new $class($options);
         }
         return $this->factories[$name];
     }
@@ -252,7 +303,9 @@ class waSystem
      */
     public function setUser(waUser $user)
     {
-        self::$factories_common['auth_user'] = $user;
+        if (!waConfig::get('is_template')) {
+            self::$factories_common['auth_user'] = $user;
+        }
     }
 
     /**
@@ -265,12 +318,83 @@ class waSystem
         return $this->getCommonFactory('auth_user', 'waAuthUser', array(), null);
     }
 
+
+    /**
+     * @param string $adapter
+     * @return waMapAdapter
+     * @throws waException
+     */
+    public function getMap($adapter = null)
+    {
+        if (empty($adapter)) {
+            $adapter = wa()->getSetting('map_adapter', 'google', 'webasyst');
+        }
+
+        $file = $this->config->getPath('system').'/map/adapters/'.$adapter.'Map.class.php';
+        if (!file_exists($file)) {
+            $file = $this->config->getPath('plugins').'/map/adapters/'.$adapter.'Map.class.php';
+        }
+        if (file_exists($file)) {
+            require_once($file);
+            $class = $adapter.'Map';
+            if (class_exists($class)) {
+                return new $class();
+            }
+        }
+        throw new waException(sprintf("Map adapter %s not found.", var_export($adapter, true)));
+    }
+
+    /**
+     * @return waMapAdapter[]
+     */
+    public function getMapAdapters()
+    {
+        $locale = $this->getLocale();
+        $result = array();
+        $paths = array(
+            $this->config->getPath('system').'/map/adapters/',
+            $this->config->getPath('plugins').'/map/adapters/',
+        );
+        foreach ($paths as $path) {
+            foreach (waFiles::listdir($path) as $f) {
+                try {
+                    if (substr($f, -13) == 'Map.class.php') {
+                        $adapter = substr($f, 0, -13);
+                        $class = $adapter.'Map';
+                        require_once($path.$f);
+                        if (class_exists($class)) {
+                            $obj = new $class();
+                            /**
+                             * @var waMapAdapter $obj
+                             */
+                            if ($obj->getLocale() && !in_array($locale, $obj->getLocale())) {
+                                continue;
+                            }
+                            $result[$adapter] = $obj;
+                        }
+                    }
+                } catch (Exception $e) {
+                }
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * @var null|string $url
+     * @return waCdn
+     */
+    public function getCdn($url = null)
+    {
+        return new waCdn($url);
+    }
+
     /**
      * Returns auth adapter.
      *
      * @param string $provider
      * @param array $params
-     * @return waAuth
+     * @return waiAuth|waAuthAdapter
      * @throws waException
      */
     public function getAuth($provider = null, $params = array())
@@ -306,8 +430,11 @@ class waSystem
 
     public function getAuthAdapters($domain = null)
     {
-        $config = $this->getAuthConfig($domain);
         $result = array();
+        $config = $this->getAuthConfig($domain);
+        if (!isset($config['used_auth_methods']) || !in_array('social', $config['used_auth_methods'])) {
+            return $result;
+        }
         if (!empty($config['adapters'])) {
             foreach ($config['adapters'] as $provider => $params) {
                 if ($params) {
@@ -328,6 +455,11 @@ class waSystem
             return array();
         }
         return $config[$domain];
+    }
+
+    public function getBackendAuthConfig()
+    {
+        return $this->getConfig()->getBackendAuth();
     }
 
 
@@ -396,155 +528,285 @@ class waSystem
     public function dispatch()
     {
         try {
-            if (preg_match('/^sitemap-?([a-z0-9_]+)?(-([0-9]+))?.xml$/i', $this->config->getRequestUrl(true), $m)) {
-                $app_id = isset($m[1]) ? $m[1] : 'webasyst';
-                if ($this->appExists($app_id)) {
-                    self::getInstance($app_id);
-                    $class = $app_id.'SitemapConfig';
-                    if (class_exists($class)) {
-                        /**
-                         * @var $sitemap waSitemapConfig
-                         */
-                        $sitemap = new $class();
-                        $n = ifempty($m[3]);
-                        if (!$n) {
-                            $n = 1;
-                        }
-                        $sitemap->display($n);
-                    }
-                } else {
-                    throw new waException("Page not found", 404);
-                }
-            } elseif (preg_match('/^([a-z0-9_]+)?\/?captcha\.php$/i', $this->config->getRequestUrl(true, true), $m)) {
-                $app_id = isset($m[1]) ? $m[1] : 'webasyst';
-                if ($this->appExists($app_id)) {
-                    $wa = self::getInstance($app_id, null, true);
-                    $captcha = $wa->getCaptcha(array('app_id' => $app_id));
-                    $captcha->display();
-                } else {
-                    throw new waException("Page not found", 404);
-                }
-            } elseif (!strncmp($this->config->getRequestUrl(true), 'oauth.php', 9)) {
-                $app_id = $this->getStorage()->get('auth_app', 'webasyst');
-                $app_system = self::getInstance($app_id);
-                if (class_exists($app_id.'OAuthController')) {
-                    $app_system->getFrontController()->execute(null, 'OAuth');
-                } else {
-                    wa('webasyst')->getFrontController()->execute(null, 'OAuth');
-                }
-            } elseif (!strncmp($this->config->getRequestUrl(true), 'payments.php/', 13)) {
-                $url = substr($this->config->getRequestUrl(true), 13);
-                waRequest::setParam('module_id', strtok($url, '/?'));
-                $webasyst_system = self::getInstance('webasyst');
-                $webasyst_system->getFrontController()->execute(null, 'payments', null, true);
-            } elseif ($this->getEnv() == 'backend' && !$this->getUser()->isAuth()) {
-                $webasyst_system = self::getInstance('webasyst', null, true);
-                $webasyst_system->getFrontController()->execute(null, 'login', waRequest::get('action'), true);
-            } elseif ($this->config instanceof waAppConfig) {
-                if ($this->getEnv() == 'backend' && !$this->getUser()->getRights($this->getConfig()->getApplication(), 'backend')) {
-                    header("Location: ".$this->getConfig()->getBackendUrl(true));
-                    exit;
-                }
-                $this->getFrontController()->dispatch();
-            } else {
-                $app = null;
-                $route = null;
-                if ($this->getEnv() == 'frontend') {
-                    // logout
-
-                    if (null !== ( $logout_url = waRequest::get('logout'))) {
-
-                        // for getting app
-                        $this->getRouting()->dispatch();
-                        $app = waRequest::param('app');
-
-                        // For logging logout action
-                        $data = array(
-                            'app_id' => $app,
-                            'contact_id' => $this->getUser()->getId(),
-                            'datetime' => date("Y-m-d H:i:s"),
-                            'action' => 'logout',
-                            'params' => $this->getEnv()
-                        );
-
-                        // logout itself
-                        $this->getUser()->logout();
-                        if (!$logout_url) {
-                            $logout_url = $this->config->getRequestUrl(false, true);
-                        }
-
-                        // logging logout
-                        if (!class_exists('waLogModel')) {
-                            wa('webasyst');
-                        }
-                        $log_model = new waLogModel();
-                        $log_model->insert($data);
-
-                        // make redirect after logout
-                        $this->getResponse()->redirect($logout_url);
-                    }
-
-                    if (!$this->getRouting()->dispatch()) {
-                        $this->getResponse()->redirect($this->getConfig()->getBackendUrl(true), 302);
-                    }
-                    $app = waRequest::param('app');
-                } else {
-                    self::getInstance('webasyst');
-                    $path = $this->getConfig()->getRequestUrl(true);
-                    if (($i = strpos($path, '?')) !== false) {
-                        $path = substr($path, 0, $i);
-                    }
-                    $url = explode("/", $path);
-                    $app = isset($url[1]) && ($url[1] != 'index.php') ? $url[1] : 'webasyst';
-                }
-                if (!$app) {
-                    $app = 'webasyst';
-                }
-
-                $app_system = self::getInstance($app, null, true);
-
-                if ($app != 'webasyst' && $this->getEnv() == 'backend' && !$this->getUser()->getRights($app_system->getConfig()->getApplication(), 'backend')) {
-                    //$this->getResponse()->redirect($this->getConfig()->getBackendUrl(true), 302);
-                    throw new waRightsException('Access to this app denied', 403);
-                }
-                if ((waRequest::param('secure') || waRequest::param('auth')) && !$this->getUser()->isAuth()) {
-                    $auth = $this->getAuthConfig();
-                    if (!empty($auth['app'])) {
-                        $app_system = self::getInstance($auth['app'], null, true);
-                    }
-                    $app_system->login();
-                } else {
-                    if (waRequest::param('secure') && $app_system->getConfig()->getInfo('csrf') &&
-                        waRequest::method() == 'post' && waRequest::post('_csrf') != waRequest::cookie('_csrf')) {
-                        throw new waException('CSRF Protection', 403);
-                    }
-                    $app_system->getFrontController()->dispatch();
-                }
+            if (waConfig::get('is_template')) {
+                return;
             }
-        } catch(waApiException $e) {
-            print $e;
-        } catch(waException $e) {
-            print $e;
-        } catch(Exception $e) {
-            if (waSystemConfig::isDebug()) {
-                print $e;
+
+            // Request URL with no '?' and GET parameters
+            $request_url = $this->config->getRequestUrl(true, true);
+            if ($this->getEnv() == 'backend') {
+                $this->dispatchBackend($request_url);
             } else {
-                $e = new waException($e->getMessage(), $e->getCode());
-                print $e;
+                $this->dispatchFrontend($request_url);
+            }
+
+        } catch(Exception $e) {
+            if (!waSystemConfig::isDebug() && !in_array($e->getCode(), array(404, 403))) {
+                $log = array("Uncaught exception ".get_class($e).":");
+                $log[] = $e->getMessage()." (".$e->getCode().")";
+                $log[] = $e instanceof waException ? $e->getFullTraceAsString() : $e->getTraceAsString();
+                waLog::log(join("\n", $log));
+            }
+            if (class_exists('waException')) {
+                if (!$e instanceof waException) {
+                    $e = new waException($e->getMessage(), $e->getCode(), $e);
+                }
+                $e->sendResponseCode();
+            }
+            print $e;
+        }
+    }
+
+    private function dispatchBackend($request_url)
+    {
+        // Redirect to HTTPS if set up in domain params
+        if (!waRequest::isHttps() && waRouting::getDomainConfig('ssl_all')) {
+            $domain = $this->getRouting()->getDomain(null, true);
+            $url = 'https://'.$this->getRouting()->getDomainUrl($domain).'/'.$this->getConfig()->getRequestUrl();
+            $this->getResponse()->redirect($url, 301);
+            return;
+        }
+
+        // Publicly available dashboard?
+        $url = explode("/", $request_url);
+        if (ifset($url[1]) == 'dashboard') {
+            wa('webasyst', 1)->getFrontController()->execute(null, 'dashboard', 'tv');
+            return;
+        }
+
+        // Access to backend without being logged in as is_user > 0
+        // -> show login form
+        if (!$this->getUser()->isAuth()) {
+            wa('webasyst', 1)->getFrontController()->execute(null, 'login', waRequest::get('action'), true);
+            return;
+        }
+
+        // Determine active application
+        $url = explode("/", $request_url);
+        $app = isset($url[1]) && ($url[1] != 'index.php') ? $url[1] : 'webasyst';
+        if (!$app) {
+            $app = 'webasyst';
+        }
+
+        if (!$this->appExists($app)) {
+            if (wa('webasyst', 1)->event('backend_dispatch_miss', $app)) {
+                return;
+            }
+            throw new waException("Page not found", 404);
+        }
+
+        // Make sure user has access to active app
+        if ($app != 'webasyst' && !$this->getUser()->getRights($app, 'backend')) {
+            throw new waRightsException('Access to this app denied', 403);
+        }
+
+        // Init system and app
+        wa('webasyst');
+        $wa_app = wa($app, 1);
+
+        // Check CSRF protection token if current active app enabled it
+        if ($wa_app->getConfig()->getInfo('csrf') && waRequest::method() == 'post') {
+            if (waRequest::post('_csrf') != waRequest::cookie('_csrf')) {
+                throw new waException('CSRF Protection', 403);
             }
         }
+
+        // Pass through to FrontController of an active app
+        $wa_app->getFrontController()->dispatch();
+    }
+
+    private function dispatchFrontend($request_url)
+    {
+        // Sitemap?
+        if (preg_match('/^sitemap-?([a-z0-9_]+)?(-([0-9]+))?.xml$/i', $request_url, $m)) {
+            $app_id = isset($m[1]) ? $m[1] : 'webasyst';
+            if ($this->appExists($app_id)) {
+                wa($app_id, 1);
+                $class = $app_id.'SitemapConfig';
+                if (class_exists($class)) {
+                    /** @var $sitemap waSitemapConfig */
+                    $sitemap = new $class();
+                    $sitemap->display(ifempty($m[3], 1));
+                    return;
+                }
+            }
+
+            throw new waException("Page not found", 404);
+        }
+
+        // Payment callback?
+        if (!strncmp($request_url, 'payments.php/', 13)) {
+            $url = substr($request_url, 13);
+            if (preg_match('~^([a-z0-9_]+)~i', $url, $m) && !empty($m[1])) {
+                $module_id = $m[1];
+                waRequest::setParam('module_id', $module_id);
+                wa('webasyst', 1)->getFrontController()->execute(null, 'payments');
+            }
+            return;
+        }
+
+        // Redirect to HTTPS if set up in domain params
+        if (!waRequest::isHttps() && waRouting::getDomainConfig('ssl_all')) {
+            $domain = $this->getRouting()->getDomain(null, true);
+            $url = 'https://'.$this->getRouting()->getDomainUrl($domain).'/'.$this->getConfig()->getRequestUrl();
+            $this->getResponse()->redirect($url, 301);
+            return;
+        }
+
+        // Captcha?
+        if (preg_match('/^([a-z0-9_]+)?\/?captcha\.php$/i', $request_url, $m)) {
+            $app_id = isset($m[1]) ? $m[1] : 'webasyst';
+            if ($this->appExists($app_id)) {
+                $captcha = wa($app_id, 1)->getCaptcha(array('app_id' => $app_id));
+                $captcha->display();
+                return;
+            }
+
+            throw new waException("Page not found", 404);
+        }
+
+        // Oauth?
+        if (!strncmp($request_url, 'oauth.php', 9)) {
+            $app_id = $this->getStorage()->get('auth_app');
+            if (!$app_id) {
+                $app_id = waRequest::get('app', null, 'string');
+            }
+            if ($app_id && !$this->appExists($app_id)) {
+                throw new waException("Page not found", 404);
+            }
+            $app_system = wa($app_id, 1);
+            if (!class_exists($app_id.'OAuthController')) {
+                $app_system = wa('webasyst', 1);
+            }
+            $app_system->getFrontController()->execute(null, 'OAuth');
+            return;
+        }
+
+        // One-time auth app token?
+        if (!strncmp($request_url, 'link.php/', 9)) {
+            $token = strtok(substr($request_url, 9), '/?');
+            if ($token) {
+                $app_token_model = new waAppTokensModel();
+                $row = $app_token_model->getById($token);
+                if ($row) {
+                    if ($row['expire_datetime'] && strtotime($row['expire_datetime']) < time()) {
+                        $app_token_model->purge();
+                    } else {
+                        wa($row['app_id'], true)->getConfig()->dispatchAppToken($row);
+                        return;
+                    }
+                }
+            }
+
+            throw new waException("Page not found", 404);
+        }
+
+        // Therefore, this is a regular frontend pageview.
+        // Run it through the routing, redirecting to backend if no routing is set up.
+        $route_found = $this->getRouting()->dispatch();
+        if (!$route_found) {
+            $this->getResponse()->redirect($this->getConfig()->getBackendUrl(true), 302);
+            return;
+        }
+
+        // Redirect to HTTPS if set up in routing params
+        if (!waRequest::isHttps() && waRequest::param('ssl_all')) {
+            $domain = $this->getRouting()->getDomain(null, true);
+            $url = 'https://'.$this->getRouting()->getDomainUrl($domain).'/'.$this->getConfig()->getRequestUrl();
+            $this->getResponse()->redirect($url, 301);
+            return;
+        }
+
+        // Active application determined by the routing
+        $app = waRequest::param('app', null, 'string');
+        if (!$app) {
+            $app = 'webasyst';
+        }
+
+        // Is this a logout?
+        $logout_url = waRequest::get('logout', null, 'string');
+        if ($logout_url !== null) {
+            $contact_id = $this->getUser()->getId();
+            if ($contact_id) {
+                // logout user
+                $this->getUser()->logout();
+
+                // logging logout
+                if (!class_exists('waLogModel')) {
+                    wa('webasyst');
+                }
+                $log_model = new waLogModel();
+                $log_model->insert(array(
+                    'app_id'     => $app,
+                    'contact_id' => $contact_id,
+                    'datetime'   => date("Y-m-d H:i:s"),
+                    'params'     => 'frontend',
+                    'action'     => 'logout',
+                ));
+            } else {
+                // We destroy session even if user is not logged in.
+                // This clears session-based pseudo-auth for many apps.
+                wa()->getStorage()->destroy();
+                // Do not allow custom URL in this case
+                // because of redirection-based phishing attacks
+                $logout_url = null;
+            }
+
+            // Make sure redirect is to the same domain
+            if (!empty($logout_url)) {
+                $domain = $this->getRouting()->getDomain(null, true);
+                $next_domain = @parse_url($logout_url, PHP_URL_HOST);
+                if ($next_domain && $domain !== $next_domain) {
+                    $logout_url = null;
+                }
+            }
+            // make redirect after logout
+            if (empty($logout_url)) {
+                $logout_url = $this->config->getRequestUrl(false, true);
+            }
+            $this->getResponse()->redirect($logout_url);
+            return;
+        }
+
+        // Initialize active application
+        $app_system = wa($app, 1);
+
+        // Access to a secure area of the frontend without being logged in
+        // -> show login form
+        if (!$this->getUser()->isAuth() && (waRequest::param('secure') || waRequest::param('auth'))) {
+            $auth = $this->getAuthConfig();
+            if (!empty($auth['app'])) {
+                $app_system = wa($auth['app'], 1);
+            }
+            $app_system->login();
+            return;
+        }
+
+        // CSRF protection for secure parts of the frontend
+        if (waRequest::param('secure') && waRequest::method() == 'post' && $app_system->getConfig()->getInfo('csrf')) {
+            if (waRequest::post('_csrf') != waRequest::cookie('_csrf')) {
+                throw new waException('CSRF Protection', 403);
+            }
+        }
+
+        // All seems fine, pass the request to FrontController of an active app
+        $app_system->getFrontController()->dispatch();
     }
 
     public function dispatchCli($argv)
     {
+        if (waConfig::get('is_template')) {
+            return;
+        }
+
         $params = array();
         $app = $argv[1];
-        $class = $app.ucfirst($argv[2])."Cli";
+        $class = $app.ucfirst(ifset($argv[2], 'help'))."Cli";
         $argv = array_slice($argv, 3);
         while ($arg = array_shift($argv)) {
-            if(mb_substr($arg, 0, 2) == '--') {
+            if (mb_substr($arg, 0, 2) == '--') {
                 $key = mb_substr($arg, 2);
-            } else if(mb_substr($arg, 0, 1) == '-') {
+            } elseif (mb_substr($arg, 0, 1) == '-') {
                 $key = mb_substr($arg, 1);
             } else {
                 $params[] = $arg;
@@ -555,6 +817,10 @@ class waSystem
         waRequest::setParam($params);
         // Load system
         waSystem::getInstance('webasyst');
+
+        if (!$this->appExists($app)) {
+            throw new waException("App ".$app." not found", 404);
+        }
         // Load app
         waSystem::getInstance($app, null, true);
         if (class_exists($class)) {
@@ -600,7 +866,11 @@ class waSystem
     public function getVersion($app_id = null)
     {
         if ($app_id === null) {
-            $app_id = $this->getConfig()->getApplication();
+            if ($this->getConfig() instanceof waAppConfig) {
+                $app_id = $this->getConfig()->getApplication();
+            } else {
+                $app_id = 'webasyst';
+            }
         }
 
         $app_info = $this->getAppInfo($app_id);
@@ -672,7 +942,7 @@ class waSystem
             }
         }
         if ($path) {
-            $path = preg_replace('!\.\.[/\\\]!','', $path);
+            $path = preg_replace('!\.\.[/\\\]!', '', $path);
         }
         $file = waConfig::get('wa_path_cache').'/apps/'.$app_id.($path ? '/'.$path : '');
         waFiles::create($path ? dirname($file) : $file);
@@ -700,9 +970,7 @@ class waSystem
         return $path;
     }
 
-
     /**
-     *
      * Returns path to current app's data directory.
      *
      * @param  string|null  $path    Optional path to a subdirectory in main directory with user data files.
@@ -720,7 +988,7 @@ class waSystem
             $app_id = $this->getConfig()->getApplication();
         }
         if ($path) {
-            $path = preg_replace('!\.\.[/\\\]!','', $path);
+            $path = preg_replace('!\.\.[/\\\]!', '', $path);
         }
         $file = waConfig::get('wa_path_data').'/'.($public ? 'public' : 'protected').'/'.$app_id.($path ? '/'.$path : '');
         if ($create) {
@@ -745,9 +1013,15 @@ class waSystem
         if ($app_id === null) {
             $app_id = $this->getConfig()->getApplication();
         }
-        return $this->getRootUrl($absolute).'wa-data/'.($public ? 'public' : 'protected').'/'.$app_id.($path ? '/'.$path : '');
+        $data_path = $this->getDataPath($path, $public, $app_id, false);
+        $base = waConfig::get('wa_path_root');
+        if (strpos($data_path, $base) === 0) {
+            $data_path = substr($data_path, strlen($base) + 1);
+        } else {
+            $data_path = 'wa-data/'.($public ? 'public' : 'protected').'/'.$app_id.($path ? '/'.$path : '');
+        }
+        return $this->getRootUrl($absolute).$data_path;
     }
-
 
     /**
      * Returns path to directory used for storing app's temporary files.
@@ -762,7 +1036,7 @@ class waSystem
             $app_id = $this->getConfig()->getApplication();
         }
         if ($path) {
-            $path = preg_replace('!\.\.[/\\\]!','', $path);
+            $path = preg_replace('!\.\.[/\\\]!', '', $path);
         }
         $dir = waConfig::get('wa_path_cache').'/temp/'.$app_id.($path ? '/'.$path : '');
         waFiles::create($dir);
@@ -778,19 +1052,15 @@ class waSystem
                 self::$apps = array();
                 throw new waException('File wa-config/apps.php not found.', 600);
             }
-            if (!file_exists($file) || filemtime($file) < filemtime($this->getConfig()->getPath('config', 'apps')) || waSystemConfig::isDebug()) {
+            if (!file_exists($file) || filemtime($file) < filemtime($this->getConfig()->getPath('config', 'apps'))) {
                 waFiles::create($this->getConfig()->getPath('cache').'/config');
                 $all_apps = include($this->getConfig()->getPath('config', 'apps'));
                 $all_apps['webasyst'] = true;
                 self::$apps = array();
                 foreach ($all_apps as $app => $enabled) {
                     if ($enabled) {
-                        waLocale::loadByDomain($app, $locale);
                         $app_config = $this->getAppPath('lib/config/app.php', $app);
                         if (!file_exists($app_config)) {
-                            if (false && SystemConfig::isDebug()) {
-                                throw new waException("Config not found. Create config by path ".$app_config);
-                            }
                             continue;
                         }
                         $app_info = include($app_config);
@@ -805,6 +1075,7 @@ class waSystem
                             }
                         }
                         $app_info['id'] = $app;
+                        waLocale::loadByDomain($app, $locale);
                         $app_info['name'] = _wd($app, $app_info['name']);
                         if (isset($app_info['icon'])) {
                             if (is_array($app_info['icon'])) {
@@ -835,7 +1106,35 @@ class waSystem
                                 $app_info['icon'][16] = $app_info['icon'][24];
                             }
                         }
-                        self::$apps[$app] = $app_info;
+                        // WA Header app items
+                        if (isset($app_info['header_items'])) {
+                            foreach ($app_info['header_items'] as $item_id => &$params) {
+                                if (isset($params['name'])) {
+                                    $params['name'] = _wd($app, $params['name']);
+                                }
+                                $path_to_app = ($app == 'webasyst') ? 'wa-content' : 'wa-apps/'.$app;
+                                if (isset($params['icon'])) {
+                                    if (is_array($params['icon'])) {
+                                        foreach ($params['icon'] as $size => $url) {
+                                            $params['icon'][$size] = $path_to_app.'/'.$url;
+                                        }
+                                    } else {
+                                        $params['icon'] = array(
+                                            48 => $path_to_app.'/'.$params['icon'],
+                                        );
+                                    }
+                                }
+                                if (isset($params['img'])) {
+                                    $params['img'] = $path_to_app.'/'.$params['img'];
+                                } elseif (isset($params['icon'][48])) {
+                                    $params['img'] = $params['icon'][48];
+                                }
+                            }
+                            unset($params);
+                        }
+                        self::$apps[$app] = array(
+                            'id' => $app,
+                        ) + $app_info;
                     }
                 }
                 if (!file_exists($file) || filemtime($file) < filemtime($this->getConfig()->getPath('config', 'apps'))) {
@@ -898,7 +1197,8 @@ class waSystem
                 }
                 $apps[] = array(
                     'url' => $path.'/'.$url,
-                    'name' => $escape ? htmlspecialchars($name) : $name
+                    'name' => $escape ? htmlspecialchars($name) : $name,
+                    'app' => $r['app']
                 );
             }
         }
@@ -952,15 +1252,15 @@ class waSystem
      * Returns URL corresponding to specified combination of app's module and action based on the contents of
      * configuration file routing.php of specified app.
      *
-     * @param string  $path      App, module, and action IDs separated by slash /
-     * @param array   $params    Associative array of the following optional parameters:
+     * @param string     $path      App, module, and action IDs separated by slash /
+     * @param array|bool $params    Associative array of the following optional parameters:
      *     - 'domain': domain name specified for one of existing websites
      *     - 'module': module id
      *     - 'action': action id
      *     - dynamic URL parameters described in app configuration file routing.php for specified module and action;
      *         e.g., 'category_url' is such a dynamic parameter in the following routing configuration entry:
      *         'category/<category_url>/' => 'frontend/category',
-     * @param  bool    $absolute  Flag requiring to return an absolute URL instead of a relative one.
+     * @param  bool  $absolute  Flag requiring to return an absolute URL instead of a relative one.
      * @param string $domain
      * @param string $route
      * @return string
@@ -1061,6 +1361,7 @@ class waSystem
         if (!$app) {
             $app = wa()->getConfig()->getPrefix();
         }
+
         return array_push(self::$activePlugin, $plugin ? array($app, $plugin) : array($app));
     }
 
@@ -1097,6 +1398,7 @@ class waSystem
      * Returns waPlugin object by plugin id.
      *
      * @param  string  $plugin_id
+     * @param bool $set_active
      * @throws  waException
      * @return  waPlugin
      */
@@ -1106,6 +1408,9 @@ class waSystem
         $path = $this->getConfig()->getPluginPath($plugin_id).'/lib/config/plugin.php';
         if (file_exists($path)) {
             $class = $app_id.ucfirst($plugin_id).'Plugin';
+            if (!class_exists($class)) {
+                throw new waException('Plugin class '.$class.' '.$plugin_id.' not found');
+            }
             $plugin_info = include($path);
             $plugin_info['id'] = $plugin_id;
             if (isset($plugin_info['img'])) {
@@ -1134,8 +1439,77 @@ class waSystem
             }
             return new $class($plugin_info);
         } else {
-            throw new waException('Plugin '.$plugin_id.' not found');
+            throw new waException('Plugin '.$plugin_id.' @ '.$app_id.' not found');
         }
+    }
+
+    /**
+     * @param $widget_id
+     * @return waWidget
+     * @throws waException
+     */
+    public function getWidget($widget_id)
+    {
+        $widget_model = new waWidgetModel();
+        $widget = $widget_model->getById($widget_id);
+        if ($widget) {
+            if ($this->getConfig()->getApplication() != $widget['app_id']) {
+                $path = self::getInstance($widget['app_id'])->getConfig()->getWidgetPath($widget['widget']);
+            } else {
+                $path = $this->getConfig()->getWidgetPath($widget['widget']);
+            }
+            $widget_path = $path . '/lib/config/widget.php';
+            if (file_exists($widget_path)) {
+                if ($widget['app_id'] == 'webasyst') {
+                    $class_filename = $path . '/lib/' . $widget['widget'] . '.widget.php';
+                    if (file_exists($class_filename)) {
+                        require_once($class_filename);
+                    } else {
+                        throw new waException('Widget '.$widget['widget'].' not found', 404);
+                    }
+                    $class = $widget['widget'].'Widget';
+                } else {
+                    $class = $widget['app_id'] . ucfirst($widget['widget']) . 'Widget';
+                }
+                if (!class_exists($class)) {
+                    throw new waException('Widget class '.$class.' '.$widget['widget'].' not found', 404);
+                }
+                $widget_config = include($widget_path);
+                $widget = $widget + $widget_config;
+                if (isset($widget['img'])) {
+                    $widget['img'] = 'wa-apps/'.$widget['app_id'].'/widgets/'.$widget['widget'].'/'.$widget['img'];
+                }
+                return new $class($widget);
+            } else {
+                throw new waException('Widget '.$widget['widget'].' not found', 404);
+            }
+        } else {
+            throw new waException('Widget '.$widget_id.' not found', 404);
+        }
+    }
+
+    /**
+     * For debug need delete before release
+     * @param $name
+     * @param null $params
+     * @param null $array_keys
+     * @return array
+     */
+    public function eventNew($name, &$params = null, $array_keys = null)
+    {
+        if (is_array($name)) {
+            $event_app_id = $name[0];
+            $name = $name[1];
+        } else {
+            $event_app_id = $this->getConfig()->getApplication();
+        }
+
+        $options = array(
+            'array_keys' => $array_keys
+        );
+
+        $event_class = new waEvent($event_app_id, $name, $options);
+        return $event_class->run($params);
     }
 
     /**
@@ -1148,17 +1522,34 @@ class waSystem
      */
     public function event($name, &$params = null, $array_keys = null)
     {
+        $plugins = null;
         $result = array();
+        $event_system = $this;
         if (is_array($name)) {
             $event_app_id = $name[0];
-            $event_system = self::getInstance($event_app_id);
             $name = $name[1];
+            if ($this->appExists($event_app_id)) {
+                $event_system = self::getInstance($event_app_id);
+            } else {
+                $event_system = self::getInstance('webasyst');
+                $plugins = array();
+            }
         } else {
             $event_app_id = $this->getConfig()->getApplication();
-            $event_system = $this;
         }
-        $event_prefix = wa($event_app_id)->getConfig()->getPrefix();
 
+        // Super event hook in wa-config/SystemConfig is called for all events
+        if (method_exists($event_system->getConfig(), 'eventHook')) {
+            $r = $event_system->getConfig()->eventHook($event_app_id, $name, $params);
+            if (is_array($r)) {
+                return $r;
+            }
+        }
+
+        // Make sure active app stays the same after the event
+        $old_app = self::getApp();
+
+        // Load event handlers list from apps
         if (!isset(self::$handlers['apps'])) {
             self::$handlers['apps'] = array();
             $cache_file = $this->config->getPath('cache', 'config/handlers');
@@ -1183,23 +1574,35 @@ class waSystem
             }
         }
 
+        // Load event handlers list from plugins
         if (!isset(self::$handlers['plugins'][$event_app_id])) {
+            if ($plugins === null) {
+                $plugins = $event_system->getConfig()->getPlugins();
+            }
             self::$handlers['plugins'][$event_app_id] = array();
-            $plugins = $event_system->getConfig()->getPlugins();
             foreach ($plugins as $plugin_id => $plugin) {
                 if (!empty($plugin['handlers'])) {
                     foreach ($plugin['handlers'] as $handler_event => $handler_method) {
-                        self::$handlers['plugins'][$event_app_id][$handler_event][$plugin_id] = $handler_method;
+                        if (!is_array($handler_method)) {
+                            if ($handler_event && $handler_event{0} != '/') {
+                                self::$handlers['plugins'][$event_app_id][$handler_event][$plugin_id] = $handler_method;
+                            } else {
+                                // Allows plugins to ask for all events based on regex match, e.g. '/backend_.*/'
+                                self::$handlers['plugins'][$event_app_id]['*'][$plugin_id][$handler_event] = $handler_method;
+                            }
+                        }
                     }
                 }
             }
+
         }
 
+        // Trigger event handlers of apps
         if (isset(self::$handlers['apps'][$event_app_id][$name])) {
             $path = $this->getConfig()->getPath('apps');
             foreach (self::$handlers['apps'][$event_app_id][$name] as $app_id) {
-                $file_path = $path.'/'.$app_id.'/lib/handlers/'.$event_prefix.".".$name.".handler.php";
-                if (!file_exists($file_path)) {
+                $file_path = $path.'/'.$app_id.'/lib/handlers/'.$event_app_id.".".$name.".handler.php";
+                if (!file_exists($file_path) || !wa()->appExists($app_id)) {
                     continue;
                 }
                 wa($app_id);
@@ -1208,12 +1611,20 @@ class waSystem
                 if (strpos($name, '.') !== false) {
                     $class_name = strtok($class_name, '.').ucfirst(strtok(''));
                 }
-                $class_name = $app_id.ucfirst($event_prefix).ucfirst($class_name)."Handler";
+                $class_name = $app_id.ucfirst($event_app_id).ucfirst($class_name)."Handler";
+                if (!class_exists($class_name)) {
+                    if (waSystemConfig::isDebug()) {
+                        waLog::log('Event handler class does not exist: '.$class_name);
+                    }
+                    continue;
+                }
+
                 /**
                  * @var $handler waEventHandler
                  */
-                $handler = new $class_name();
+                self::pushActivePlugin(null, $app_id);
                 try {
+                    $handler = new $class_name();
                     $r = $handler->execute($params);
                     if ($r !== null) {
                         $result[$app_id] = $r;
@@ -1221,40 +1632,119 @@ class waSystem
                 } catch (Exception $e) {
                     waLog::log('Event handling error in '.$file_path.': '.$e->getMessage());
                 }
-            }
-        }
-        if (isset(self::$handlers['plugins'][$event_app_id][$name])) {
-            $plugins = $event_system->getConfig()->getPlugins();
-            foreach (self::$handlers['plugins'][$event_app_id][$name] as $plugin_id => $method) {
-                if (!isset($plugins[$plugin_id])) {
-                    continue;
-                }
-                $plugin = $plugins[$plugin_id];
-                self::pushActivePlugin($plugin_id, $event_prefix);
-                $class_name = $event_app_id.ucfirst($plugin_id).'Plugin';
-                try {
-                    $class = new $class_name($plugin);
-                    // Load plugin locale if it exists
-                    $locale_path = $this->getAppPath('plugins/'.$plugin_id.'/locale', $event_app_id);
-                    if (is_dir($locale_path)) {
-                        waLocale::load($this->getLocale(), $locale_path, self::getActiveLocaleDomain(), false);
-                    }
-                    if (method_exists($class, $method) && null !== ( $r = $class->$method($params))) {
-                        if ($array_keys && is_array($r)) {
-                            foreach ($array_keys as $k) {
-                                if (!isset($r[$k])) {
-                                    $r[$k] = '';
-                                }
-                            }
-                        }
-                        $result[$plugin_id.'-plugin'] = $r;
-                    }
-                } catch (Exception $e) {
-                    waLog::log('Event handling error in '.$class_name.'->'.$name.'(): '.$e->getMessage());
-                }
                 self::popActivePlugin();
             }
         }
+
+        //
+        // Trigger event handlers of plugins
+        //
+
+        // Each plugin can only be called once per event.
+        // (Except several regex-based wildcard matches when
+        // there are no higher-priority handlers defined for the event.)
+        $plugins_called = array();
+
+        // Try plugin handlers: literal match first, then wildcards.
+        $aliases = array($name);
+        if (strpos($name, '.') !== false) {
+            $aliases[] = preg_replace('@\.[^\.]+$@', '.*', $name);
+        }
+        $aliases[] = '*';
+        foreach ($aliases as $alias) {
+            if (!isset(self::$handlers['plugins'][$event_app_id][$alias])) {
+                continue;
+            }
+            if ($plugins === null) {
+                $plugins = $event_system->getConfig()->getPlugins();
+            }
+            foreach (self::$handlers['plugins'][$event_app_id][$alias] as $plugin_id => $methods) {
+                if (!isset($plugins[$plugin_id]) || !empty($plugins_called[$plugin_id])) {
+                    continue;
+                }
+                $plugins_called[$plugin_id] = true;
+                $class_name = $event_app_id.ucfirst($plugin_id).'Plugin';
+                if (!class_exists($class_name)) {
+                    if (waSystemConfig::isDebug()) {
+                        waLog::log('Event handler class does not exist: '.$class_name);
+                    }
+                    continue;
+                }
+
+                // Make sure there is at least one plugin method that passes a regex test.
+                // This optimizes away expensive waLocale::load() call for wildcard-based handlers.
+                // (There may be several methods when plugin subscribed for several regex wildcards.)
+                if (!is_array($methods)) {
+                    $methods = array('' => $methods);
+                }
+                foreach($methods as $regex => $method) {
+                    if ($regex != '' && !preg_match($regex, $name)) {
+                        unset($methods[$regex]);
+                    }
+                }
+                if (!$methods) {
+                    continue;
+                }
+
+                // Activate _wp() for current plugin
+                self::pushActivePlugin($plugin_id, $event_app_id);
+
+                // Load plugin locale
+                $locale_path = $this->getAppPath('plugins/'.$plugin_id.'/locale', $event_app_id);
+                if (is_dir($locale_path)) {
+                    waLocale::load($this->getLocale(), $locale_path, self::getActiveLocaleDomain(), false);
+                }
+
+                // Call plugin handler methods that match the event.
+                try {
+                    $class = new $class_name($plugins[$plugin_id]);
+                    foreach($methods as $regex => $method) {
+                        if (!method_exists($class, $method)) {
+                            if (waSystemConfig::isDebug()) {
+                                waLog::log('Event handler method does not exist: '.$class_name.'->'.$method.'()');
+                            }
+                            continue;
+                        }
+                        if ($name == $alias) {
+                            $r = $class->$method($params);
+                        } else {
+                            $r = $class->$method($params, $name);
+                        }
+                        if ($r !== null) {
+                            if ($array_keys && is_array($r)) {
+                                foreach ($array_keys as $k) {
+                                    if (!isset($r[$k])) {
+                                        $r[$k] = '';
+                                    }
+                                }
+                            }
+                            $result[$plugin_id.'-plugin'] = $r;
+
+                            // Only one result can be returned per event per plugin.
+                            // So we ignore all other methods matched by regex wildcard
+                            // after we get a result.
+                            break;
+                        }
+                    }
+                } catch (Exception $e) {
+                    waLog::log('Event handling error in '.$class_name.":\n".$e->getMessage()."\n".$e->getTraceAsString());
+                }
+
+                // Deactivate _wp() for current plugin
+                self::popActivePlugin();
+            }
+        }
+
+        wa($old_app, 1);
+
+        // Super event hook in wa-config/SystemConfig is called for all events
+        if (method_exists($event_system->getConfig(), 'eventHookAfter')) {
+            $r = $event_system->getConfig()->eventHookAfter($event_app_id, $name, $params, $result);
+            if (is_array($r)) {
+                return $r;
+            }
+        }
+
         return $result;
     }
 
@@ -1291,8 +1781,8 @@ class waSystem
 
         $themes = array();
         array_unique($theme_ids);
-        foreach($theme_ids as $id) {
-            $theme = new waTheme($id,$app_id);
+        foreach ($theme_ids as $id) {
+            $theme = new waTheme($id, $app_id);
             if ($theme->path) {
                 $themes[$id] = $theme;
             }
@@ -1313,4 +1803,3 @@ function wa($name = null, $set_current = false)
 {
     return waSystem::getInstance($name, null, $set_current);
 }
-

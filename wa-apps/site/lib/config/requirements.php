@@ -1,7 +1,7 @@
 <?php
 return array(
     'app.installer'=>array(
-        'version'=>'>=1.1.0.18420',
+        'version'=>'>=1.10.0',
         'strict'=>true,
     ),
 );

@@ -50,7 +50,7 @@ return array(
         'title' => array('varchar', 255, 'null' => 0, 'default' => ''),
         'url' => array('varchar', 255),
         'full_url' => array('varchar', 255),
-        'content' => array('text', 'null' => 0),
+        'content' => array('mediumtext', 'null' => 0),
         'create_datetime' => array('datetime', 'null' => 0),
         'update_datetime' => array('datetime', 'null' => 0),
         'create_contact_id' => array('int', 11, 'null' => 0),
@@ -85,6 +85,8 @@ return array(
         'meta_title' => array('varchar', 255),
         'meta_keywords' => array('text'),
         'meta_description' => array('text'),
+        'album_id' => array('int', 11),
+        'album_link_type' => array('enum', "'blog','photos'"),
         ':keys' => array(
             'PRIMARY' => 'id',
             'routing' => array('status', 'url', 'blog_id'),

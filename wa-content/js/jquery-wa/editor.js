@@ -41,7 +41,7 @@ jQuery.fn.waEditor = function (options) {
             editorOnLoadFocus: true,
             deniedTags: false,
             minHeight: 300,
-            buttonSource: false,
+            source: false,
             paragraphy: false,
             replaceDivs: false,
             toolbarFixed: true,
@@ -64,7 +64,7 @@ jQuery.fn.waEditor = function (options) {
                 }
                 return true;
             },
-            syncBeforeCallback: function(html) {
+            syncCallback: function (html) {
                 html = html.replace(/{[a-z$][^}]*}/gi, function (match, offset, full) {
                     var i = full.indexOf("</script", offset + match.length);
                     var j = full.indexOf('<script', offset + match.length);
@@ -76,7 +76,10 @@ jQuery.fn.waEditor = function (options) {
                     }
                     return match;
                 });
-                return syncCallback ? syncCallback(html) : html;
+                if (syncCallback) {
+                    html = syncCallback(html);
+                }
+                this.$textarea.val(html);
             }
         }, (options || {}));
         if (button) {
@@ -118,7 +121,7 @@ jQuery.fn.waEditor = function (options) {
         editor.setOption("minLines", 2);
         editor.setOption("maxLines", 10000);
         editor.setAutoScrollEditorIntoView(true);
-        
+
         if (options['editorOnLoadFocus'])
         {
           editor.focus();
@@ -214,7 +217,15 @@ jQuery.fn.waEditor = function (options) {
             return false;
         });
 
-        if ($.storage && $.storage.get(wa_app + '/editor') == 'html') {
+        var initial_mode = 'wysiwyg';
+        try {
+            if ($.storage && $.storage.get(wa_app + '/editor') == 'html') {
+                initial_mode = 'html';
+            }
+        } catch (e) {
+        }
+
+        if (initial_mode == 'html') {
             wrapper.find('.wa-editor-wysiwyg-html-toggle li.selected').removeClass('selected');
             wrapper.find('.html').parent().addClass('selected');
             self.redactor('core.getBox').hide();

@@ -30,9 +30,11 @@ class waContactNameField extends waContactStringField
     {
         if ($contact['is_company']) {
             $name = !empty($contact['company']) ? $contact['company'] : '';
+        } else if ($contact['is_user'] && ($contact['is_user'] == 1 || $contact['login'])) {
+            $name = waUser::formatName($contact);
         } else {
             $name = array();
-            foreach(array('firstname', 'middlename', 'lastname') as $part) {
+            foreach(self::getNameOrder() as $part) {
                 if ( ($part = trim($contact[$part])) || $part === '0') {
                     $name[] = $part;
                 }
@@ -97,47 +99,73 @@ class waContactNameField extends waContactStringField
 
     public function set(waContact $contact, $value, $params = array(), $add = false)
     {
-        $value = trim($value);
+        $value = preg_replace('~\s+~', ' ', trim($value));
         if ($contact['is_company']) {
             return $value;
         }
-        $value_parts = explode(' ', trim($value), 3);
+
+        if ($contact['name'] == $value) {
+            return $contact['name'];
+        }
+
+        $contact['firstname'] = '';
+        $contact['middlename'] = '';
+        $contact['lastname'] = '';
+        if (!strlen($value)) {
+            return $value;
+        }
+
+        $value_parts = explode(' ', $value);
+        $sf_order = self::getNameOrder();
+
         switch (count($value_parts)) {
             case 1:
                 $contact['firstname'] = $value;
                 break;
             case 2:
-                $contact['firstname'] = $value_parts[0];
-                $contact['lastname'] = $value_parts[1];
+                if ($sf_order[0] == 'lastname') {
+                    $contact['lastname'] = $value_parts[0];
+                    $contact['firstname'] = $value_parts[1];
+                } else {
+                    $contact['firstname'] = $value_parts[0];
+                    $contact['lastname'] = $value_parts[1];
+                }
                 break;
-            case 3:
-                $contact['firstname'] = $value_parts[0];
-                $contact['middlename'] = $value_parts[1];
-                $contact['lastname'] = $value_parts[2];
+            default:
+                while($value_parts && count($sf_order) > 1) {
+                    if ($sf_order[0] == 'lastname') {
+                        $contact[array_pop($sf_order)] = array_pop($value_parts);
+                    } else {
+                        $contact[array_shift($sf_order)] = array_shift($value_parts);
+                    }
+                }
+                $contact['lastname'] = join(' ', $value_parts);
                 break;
         }
         return $value;
     }
 
-    public static function formatName($contact)
+    public static function formatName($contact, $force_not_user = false)
     {
         if (!is_array($contact) && !($contact instanceof waContact)) {
             return '';
         }
         if (!empty($contact['is_company'])) {
             $name = !empty($contact['company']) ? $contact['company'] : '';
+        } else if (!$force_not_user && !empty($contact['is_user']) && ($contact['is_user'] == 1 || !empty($contact['login']))) {
+            $name = waUser::formatName($contact);
         } else {
             $name = array();
-            foreach(array('firstname', 'middlename', 'lastname') as $part) {
+            foreach(self::getNameOrder() as $part) {
                 if (!empty($contact[$part])) {
                     if ( ($part = trim($contact[$part])) || $part === '0') {
                         $name[] = $part;
                     }
                 }
             }
-
             $name = trim(implode(' ', $name));
         }
+
         if (!$name && $name !== '0') {
             $email = '';
             if ($contact instanceof waContact) {
@@ -167,4 +195,29 @@ class waContactNameField extends waContactStringField
         }
         return $name;
     }
+
+    public static function getNameOrder($clear_cache = false)
+    {
+        static $result = null;
+        if ($clear_cache) {
+            $result = null;
+        }
+        if ($result === null) {
+            try {
+                $fld = waContactFields::get('name', 'person');
+                if ($fld) {
+                    $result = $fld->getParameter('subfields_order');
+                }
+            } catch(Exception $e) {
+            }
+            $def = array('firstname' => 1, 'middlename' => 1, 'lastname' => 1);
+            if ($result && is_array($result)) {
+                $result = array_keys(array_intersect_key(array_flip($result) + $def, $def));
+            } else {
+                $result = array_keys($def);
+            }
+        }
+        return $result;
+    }
 }
+

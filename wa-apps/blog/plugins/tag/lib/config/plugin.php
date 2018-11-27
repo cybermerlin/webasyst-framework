@@ -4,7 +4,7 @@ return array(
     'name'        => /*_wp*/('Tags'),
     'description' => /*_wp*/('Assign tags to posts'),
     'vendor'      => 'webasyst',
-    'version'     => '1.0.0',
+    'version'     => '1.1',
     'img'         => 'img/tags.png',
     'frontend'    => true,
 
@@ -20,6 +20,7 @@ return array(
         'post_shedule'           => 'postSave',
         'post_delete'            => 'postDelete',
         'frontend_action_default'=> 'frontendSidebar',
+        'frontend_action_post'=> 'frontendSidebar',
+        'frontend_action_page'=> 'frontendSidebar',
     ),
 );
-//EOF

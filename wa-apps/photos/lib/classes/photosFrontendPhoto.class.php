@@ -2,20 +2,25 @@
 
 class photosFrontendPhoto
 {
-    public static function getLink($photo, $album = null)
+    public static function getLink($photo, $album = null, $absolute = true)
     {
+        if (isset($photo['status']) && $photo['status'] <= 0 && empty($photo['hash'])) {
+            return null;
+        }
+
         static $wa = null;
         $wa = $wa ? $wa : wa();
 
         $link = null;
+        $real_domain = $wa->getRouting()->getDomain(null, true, false);
         if (is_null($album)) {
             $link = $wa->getRouteUrl('photos/frontend/photo', array(
-                'url' => $photo['url'].(isset($photo['status']) && $photo['status'] <= 0 ? ':'.$photo['hash'] : '')
-            ), true);
+                'url' => $photo['url'].(isset($photo['status']) && ($photo['status'] <= 0 && !empty($photo['hash'])) ? ':'.$photo['hash'] : '')
+            ), $absolute, $real_domain);
         } else if (is_array($album)) {
             $link = $wa->getRouteUrl('photos/frontend/photo', array(
                 'url' => $album['full_url'].'/'.$photo['url']
-            ), true);
+            ), $absolute, $real_domain);
         } else {
             $hash = $album;
             if (substr($hash, 0, 1) == '#') {
@@ -32,7 +37,7 @@ class photosFrontendPhoto
             } else if (count($hash) == 1) {
                 $params[$hash[0]] = $hash[0];
             }
-            $link = $wa->getRouteUrl('photos/frontend/photo', $params, true);
+            $link = $wa->getRouteUrl('photos/frontend/photo', $params, $absolute, $real_domain);
         }
         return $link ? rtrim($link, '/').'/' : null;
     }
